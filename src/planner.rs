@@ -2,9 +2,10 @@ use anyhow::{Context, Result, ensure};
 use serde::Serialize;
 use std::process::Command;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
+    #[default]
     Resident,
     Hybrid,
     DenseStream,
@@ -20,6 +21,7 @@ pub struct ModelMemory {
     pub vram_scratch_bytes: u64,
 }
 
+#[derive(Default)]
 pub struct PlanOptions {
     pub mode: Mode,
     /// Explicit contiguous suffix length. In hybrid mode `None` uses the VRAM budget.
@@ -402,9 +404,7 @@ mod tests {
     fn options(mode: Mode) -> PlanOptions {
         PlanOptions {
             mode,
-            gpu_layers: None,
-            ram_budget: None,
-            vram_budget: None,
+            ..Default::default()
         }
     }
 
