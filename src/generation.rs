@@ -12,11 +12,22 @@ use tokenizers::Tokenizer;
 
 /// Opening and closing tags of a reasoning block.
 pub const THINK_MARKERS: [&str; 2] = ["<think>", "</think>"];
+const THINK_OPEN: &str = "<think>";
+const THINK_SKIP: &str = "<think>\n\n</think>\n\n";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Message {
     pub role: String,
     pub content: String,
+}
+
+/// Per-request settings for rendering a chat prompt.
+#[derive(Clone, Debug, Default)]
+pub struct ChatOptions {
+    /// Extra chat template variables, such as `enable_thinking`.
+    pub template: serde_json::Map<String, serde_json::Value>,
+    /// Whether a reasoning model thinks before it answers. `None` leaves that to the model.
+    pub thinking: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -199,19 +210,28 @@ impl Engine {
     }
 
     /// Callers supply a nonempty list of system, user and assistant messages.
-    pub fn chat_prompt(&self, messages: &[Message]) -> Result<String> {
+    pub fn chat_prompt(&self, messages: &[Message], options: &ChatOptions) -> Result<String> {
         if let Some(template) = &self.template {
             let mut env = template_environment();
             env.add_template("chat", template)?;
-            return env
+            let mut context = options.template.clone();
+            context.insert("messages".into(), serde_json::to_value(messages)?);
+            context.insert("bos_token".into(), self.bos_text.as_str().into());
+            context.insert("eos_token".into(), self.eos_text.as_str().into());
+            context.insert("add_generation_prompt".into(), true.into());
+            let mut prompt = env
                 .get_template("chat")?
-                .render(minijinja::context! {
-                    messages => messages,
-                    bos_token => self.bos_text,
-                    eos_token => self.eos_text,
-                    add_generation_prompt => true,
-                })
-                .context("render chat template");
+                .render(context)
+                .context("render chat template")?;
+            // A template that reads `enable_thinking` ends the prompt with a think tag itself.
+            // For the others, start the reply with an open or an empty reasoning block.
+            let tagged = THINK_MARKERS.iter().any(|m| prompt.trim_end().ends_with(m));
+            if let (Some(thinking), true, false) =
+                (options.thinking, self.separates_reasoning(), tagged)
+            {
+                prompt.push_str(if thinking { THINK_OPEN } else { THINK_SKIP });
+            }
+            return Ok(prompt);
         }
         ensure!(
             messages.len() == 1 && messages[0].role == "user",

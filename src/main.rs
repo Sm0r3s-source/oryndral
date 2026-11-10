@@ -263,10 +263,11 @@ fn generate(args: Generate, benchmark: bool) -> Result<()> {
     sampling.validate()?;
     let (mut engine, details, load_seconds) = open_engine(&args.model, &args.load)?;
     let prompt = if args.chat {
-        engine.chat_prompt(&[Message {
+        let message = Message {
             role: "user".to_owned(),
             content: args.prompt,
-        }])?
+        };
+        engine.chat_prompt(&[message], &Default::default())?
     } else {
         args.prompt
     };

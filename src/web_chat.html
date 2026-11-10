@@ -133,11 +133,14 @@
     .composer { flex: none; width: min(calc(100% - 2rem), var(--measure)); margin: 0 auto .7rem; }
     .compose { padding: .55rem .6rem .5rem; border: 1px solid var(--line); border-radius: 1.5rem; background: var(--panel); box-shadow: var(--shadow); }
     .compose:focus-within { border-color: var(--accent); }
-    #prompt { max-height: min(12rem, 32dvh); padding: .4rem .55rem; border: 0; background: transparent; resize: none; }
+    #prompt { max-height: min(12rem, 32dvh); padding: .4rem .55rem; border: 0; background: transparent; resize: none; field-sizing: content; }
     #prompt:focus-visible { outline: none; }
     #error { margin: .2rem .55rem .35rem; color: var(--bad); font-size: .86rem; overflow-wrap: anywhere; }
     .actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .2rem; }
+    .chips { display: flex; align-items: center; gap: .4rem; min-width: 0; }
     #model { min-width: 0; overflow: hidden; padding: .3rem .7rem; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: .8rem; text-overflow: ellipsis; white-space: nowrap; }
+    #think { flex: none; padding: .24rem .7rem; color: var(--muted); font-size: .8rem; }
+    #think[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
     #shortcut { display: block; margin-top: .4rem; text-align: center; font-size: .72rem; }
 
     @media (prefers-reduced-motion: reduce) {
@@ -219,7 +222,10 @@
         <textarea id="prompt" rows="1" required placeholder="Ask your model…" aria-describedby="shortcut"></textarea>
         <p id="error" role="alert" hidden></p>
         <div class="actions">
-          <span id="model" title="Loaded model">Looking for a model…</span>
+          <div class="chips">
+            <span id="model" title="Loaded model">Looking for a model…</span>
+            <button type="button" id="think" aria-pressed="true" title="Reason before answering. Turn off for faster replies." hidden>Thinking on</button>
+          </div>
           <button type="button" class="round" id="cancel" aria-label="Stop generating" title="Stop" hidden>
             <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></svg>
           </button>
@@ -238,8 +244,8 @@
       const form = byId("compose"), prompt = byId("prompt"), transcript = byId("transcript");
       const send = byId("send"), cancel = byId("cancel"), clear = byId("clear"), connect = byId("connect");
       const status = byId("status"), error = byId("error"), empty = byId("empty"), settings = byId("settings");
+      const think = byId("think");
       const SAVED = ["system", "temperature", "top-p", "limit", "single"];
-      const CLOSE = "</think>";
       const history = [];
       let model = "";
       let active = null;
@@ -409,10 +415,18 @@
         cancel.hidden = !busy;
         send.disabled = !model || connecting || !prompt.value.trim();
         clear.disabled = busy || !transcript.querySelector("article");
-        connect.disabled = busy || connecting;
+        connect.disabled = think.disabled = busy || connecting;
       }
 
+      const thinking = () => think.getAttribute("aria-pressed") === "true";
+      function setThinking(on) {
+        think.setAttribute("aria-pressed", String(on));
+        think.textContent = on ? "Thinking on" : "Thinking off";
+      }
+
+      // Browsers with `field-sizing` grow the message box themselves.
       function fitPrompt() {
+        if (CSS.supports("field-sizing", "content")) return;
         prompt.style.height = "auto";
         prompt.style.height = `${prompt.scrollHeight}px`;
       }
@@ -436,6 +450,7 @@
           const { data } = await response.json();
           model = Array.isArray(data) && typeof data[0]?.id === "string" ? data[0].id : "";
           if (!model) throw new Error("The server did not list a model.");
+          think.hidden = data[0].reasoning !== true;
           byId("model").textContent = model;
           byId("greeting").textContent = `${model} is running on this computer.`;
           setStatus("Ready", "ready");
@@ -480,19 +495,8 @@
         return view;
       }
 
-      // The server separates reasoning that opens with <think>. Some models skip that tag and
-      // only close it, which the server cannot know while streaming, so the page handles it.
-      function parts(raw) {
-        const close = raw.reasoning ? -1 : raw.content.indexOf(CLOSE);
-        if (close < 0) return raw;
-        return {
-          reasoning: raw.content.slice(0, close).replace(/^\s*<think>/, "").trim(),
-          content: raw.content.slice(close + CLOSE.length).trimStart(),
-        };
-      }
-
       function paint(view) {
-        const { reasoning, content } = parts(view.raw);
+        const { reasoning, content } = view.raw;
         if (reasoning && content && !view.thought) view.thought = performance.now() - view.started;
         const thinking = view.live && !content;
         view.text = content;
@@ -580,6 +584,7 @@
               temperature: byId("temperature").valueAsNumber,
               top_p: byId("top-p").valueAsNumber,
               max_tokens: byId("limit").valueAsNumber,
+              ...(think.hidden ? {} : { chat_template_kwargs: { enable_thinking: thinking() } }),
             }),
           });
           if (!response.ok) throw new Error(await responseError(response));
@@ -649,6 +654,7 @@
 
       function saveSettings() {
         const values = SAVED.map((id) => [id, byId(id).type === "checkbox" ? byId(id).checked : byId(id).value]);
+        values.push(["think", thinking()]);
         try { localStorage.setItem("oryndral.settings", JSON.stringify(Object.fromEntries(values))); } catch {}
       }
 
@@ -659,6 +665,7 @@
           if (typeof saved[id] === "boolean") byId(id).checked = saved[id];
           else if (typeof saved[id] === "string") byId(id).value = saved[id];
         }
+        if (typeof saved.think === "boolean") setThinking(saved.think);
       }
 
       form.addEventListener("submit", (event) => {
@@ -690,6 +697,7 @@
         if (!send.disabled && !active) form.requestSubmit();
       });
       cancel.addEventListener("click", () => active?.abort());
+      think.addEventListener("click", () => { setThinking(!thinking()); saveSettings(); });
       clear.addEventListener("click", () => {
         history.length = 0;
         latest = null;
