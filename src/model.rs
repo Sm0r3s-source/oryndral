@@ -759,6 +759,30 @@ pub struct Session {
     pos: usize,
 }
 
+impl Session {
+    /// The number of tokens whose attention state the session holds.
+    pub fn tokens(&self) -> usize {
+        self.pos
+    }
+
+    /// Forget everything after the first `len` tokens.
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        if len >= self.pos {
+            return Ok(());
+        }
+        for kv in &mut self.kv {
+            for cached in [&mut kv.keys, &mut kv.values] {
+                *cached = match cached.take() {
+                    Some(tensor) if len > 0 => Some(tensor.narrow(2, 0, len)?),
+                    _ => None,
+                };
+            }
+        }
+        self.pos = len;
+        Ok(())
+    }
+}
+
 impl Model {
     pub fn load(
         mut src: ModelFile,

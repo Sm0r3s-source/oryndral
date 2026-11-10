@@ -41,6 +41,8 @@ One worker owns the model, with a bounded queue for up to four waiting requests.
 
 Chat requests accept `chat_template_kwargs` (passed to the chat template as extra variables) and `reasoning_effort`. For a model whose tokenizer has `<think>` and `</think>` tokens, `enable_thinking: false` or `reasoning_effort: "none"` starts the reply after an empty reasoning block, so the model answers directly. Otherwise the server opens the reasoning block itself, which keeps reasoning out of the answer when the model would have skipped the opening tag. A template that already ends the prompt with a think tag is left alone. `/v1/models` reports `"reasoning": true` for such models. Tool calling is unsupported: a request with `tools` is rejected.
 
+The engine keeps the tokens and attention state of its last generation. A prompt that begins with the same tokens continues from that state and evaluates only the rest, so each turn of a chat costs its new messages rather than the whole conversation. The state is cut back to the shared prefix when the prompts diverge and dropped if a generation fails. In a six-turn chat with a 1,450-token system prompt on Mythos-nano (RTX 4050, CUDA), time to first token on turns two to six fell from about 3.4 s to about 0.1 s with identical replies. Chat templates that drop a reply's reasoning from the history make the next prompt diverge at that reply, so the reply itself is evaluated again.
+
 The Hugging Face client reuses the standard cache and accepts an explicit repository, revision and GGUF filename. [Hugging Face Rust Hub client](https://github.com/huggingface/hf-hub)
 
 ## Attribution
