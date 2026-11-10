@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -26,7 +28,7 @@ internal sealed class ManagedServer : IDisposable
 
     public ManagedServer(string engine, string model, string cudaBin, int? context)
     {
-        string arguments = "serve " + QuoteArgument(model) + " --bind 127.0.0.1:0";
+        string arguments = "serve " + QuoteArgument(model) + " --bind 127.0.0.1:" + FreePort();
         if (cudaBin != null)
             arguments += " --mode hybrid";
         if (context.HasValue)
@@ -133,6 +135,24 @@ internal sealed class ManagedServer : IDisposable
         finally
         {
             process.Dispose();
+        }
+    }
+
+    // A stable port keeps the API address and the chat page's saved settings the same between
+    // runs. Port 0 lets the engine pick any free port when the usual one is taken.
+    private static int FreePort()
+    {
+        const int usual = 8177;
+        try
+        {
+            var probe = new TcpListener(IPAddress.Loopback, usual);
+            probe.Start();
+            probe.Stop();
+            return usual;
+        }
+        catch (SocketException)
+        {
+            return 0;
         }
     }
 

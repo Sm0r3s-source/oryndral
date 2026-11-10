@@ -1,30 +1,15 @@
 use serde_json::Value;
 use std::process::Command;
 
-fn benchmark(fixture_env: &str, mode: &str, cache_mib: &str, policy: &str) -> Value {
+/// Run a greedy 24-token benchmark on four threads and return its JSON report.
+fn run(fixture_env: &str, args: &[&str]) -> Value {
     let file = std::env::var_os(fixture_env)
         .unwrap_or_else(|| panic!("set {fixture_env} to the pinned GGUF"));
     let output = Command::new(env!("CARGO_BIN_EXE_oryndral"))
         .arg("benchmark")
         .arg(file)
-        .args([
-            "--mode",
-            mode,
-            "--expert-cache-mib",
-            cache_mib,
-            "--expert-cache-policy",
-            policy,
-            "--threads",
-            "4",
-            "--context",
-            "128",
-            "--max-tokens",
-            "24",
-            "--temperature",
-            "0",
-            "--prompt",
-            "Once upon a time",
-        ])
+        .args(["--threads", "4", "--max-tokens", "24", "--temperature", "0"])
+        .args(args)
         .output()
         .expect("launch inference benchmark");
     assert!(
@@ -33,6 +18,24 @@ fn benchmark(fixture_env: &str, mode: &str, cache_mib: &str, policy: &str) -> Va
         String::from_utf8_lossy(&output.stderr)
     );
     serde_json::from_slice(&output.stdout).expect("benchmark JSON")
+}
+
+fn benchmark(fixture_env: &str, mode: &str, cache_mib: &str, policy: &str) -> Value {
+    run(
+        fixture_env,
+        &[
+            "--mode",
+            mode,
+            "--expert-cache-mib",
+            cache_mib,
+            "--expert-cache-policy",
+            policy,
+            "--context",
+            "128",
+            "--prompt",
+            "Once upon a time",
+        ],
+    )
 }
 
 fn assert_reference(result: &Value, expected: &[u32]) {
@@ -97,31 +100,16 @@ fn moe_stream_cache_preserves_generation_and_avoids_reads() {
 #[test]
 #[ignore = "requires the pinned 1.93 GB Mythos-nano Q4_K_M GGUF"]
 fn mythos_nano_matches_llama_cpp() {
-    let file = std::env::var_os("ORYNDRAL_TEST_MYTHOS_GGUF").expect("pinned Mythos GGUF path");
-    let output = Command::new(env!("CARGO_BIN_EXE_oryndral"))
-        .arg("benchmark")
-        .arg(file)
-        .args([
+    let result = run(
+        "ORYNDRAL_TEST_MYTHOS_GGUF",
+        &[
             "--chat",
             "--prompt",
             "What is 2 + 2? Answer briefly.",
             "--context",
             "512",
-            "--threads",
-            "4",
-            "--temperature",
-            "0",
-            "--max-tokens",
-            "24",
-        ])
-        .output()
-        .expect("launch Mythos benchmark");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
+        ],
     );
-    let result: Value = serde_json::from_slice(&output.stdout).expect("benchmark JSON");
     assert_eq!(
         result["generation"]["prompt_token_ids"],
         serde_json::json!([

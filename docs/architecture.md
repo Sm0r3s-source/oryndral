@@ -37,7 +37,11 @@ The SmolLM2-135M-Instruct Q4_K_M experiment capped committed process memory at 9
 
 Dense Qwen2 GGUFs reuse the existing decoder and placement code. They use split-half RoPE and can carry separate biases for the Q, K, V and attention output projections. The Qwen2 tokenizer profile uses Candle's byte-level BPE and validates the resulting vocabulary against the GGUF. Mythos-nano uses its embedded template and the model's chat end markers. Scaled RoPE, sliding-window Qwen2 layouts and Qwen expert models require additional execution work. [llama.cpp Qwen2 implementation](https://github.com/ggml-org/llama.cpp/blob/master/src/models/qwen2.cpp) · [Mythos-nano GGUF](https://huggingface.co/squ11z1/Mythos-nano-GGUF)
 
-One worker owns the model, with a bounded queue for up to four waiting requests. Both completion routes use the same sampling, cancellation and stream lifecycle. The bundled browser chat uses the public API on the same origin. The Hugging Face client reuses the standard cache and accepts an explicit repository, revision and GGUF filename. [Hugging Face Rust Hub client](https://github.com/huggingface/hf-hub)
+One worker owns the model, with a bounded queue for up to four waiting requests. Both completion routes use the same sampling, cancellation and stream lifecycle. The bundled browser chat uses the public API on the same origin.
+
+Chat requests accept `chat_template_kwargs` (passed to the chat template as extra variables) and `reasoning_effort`. For a model whose tokenizer has `<think>` and `</think>` tokens, `enable_thinking: false` or `reasoning_effort: "none"` starts the reply after an empty reasoning block, so the model answers directly. Otherwise the server opens the reasoning block itself, which keeps reasoning out of the answer when the model would have skipped the opening tag. A template that already ends the prompt with a think tag is left alone. `/v1/models` reports `"reasoning": true` for such models. Tool calling is unsupported: a request with `tools` is rejected.
+
+The Hugging Face client reuses the standard cache and accepts an explicit repository, revision and GGUF filename. [Hugging Face Rust Hub client](https://github.com/huggingface/hf-hub)
 
 ## Attribution
 
