@@ -1,0 +1,7 @@
+*.gguf
+*.safetensors
+*.bin
+models/
+target/
+/desktop/bin/
+/desktop/obj/

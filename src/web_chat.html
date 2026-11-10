@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; connect-src 'self'; img-src data:; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'self'">
+  <title>Oryndral · Local chat</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20256%20256%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22orb%22%20x2%3D%221%22%20y2%3D%221%22%3E%3Cstop%20stop-color%3D%22%233156D3%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%236550CB%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20x%3D%2212%22%20y%3D%2212%22%20width%3D%22232%22%20height%3D%22232%22%20rx%3D%2254%22%20fill%3D%22url(%23orb)%22%2F%3E%3Cpath%20d%3D%22M170%2087A58%2058%200%201%200%20181%20151%22%20fill%3D%22none%22%20stroke%3D%22%23fff%22%20stroke-width%3D%2216%22%20stroke-linecap%3D%22round%22%2F%3E%3Ccircle%20cx%3D%22184%22%20cy%3D%22111%22%20r%3D%229%22%20fill%3D%22%23D6EAFF%22%2F%3E%3C%2Fsvg%3E">
+  <style>
+    :root {
+      color-scheme: light dark;
+      --page: #faf9fd; --panel: #fff; --soft: #eeedf9; --line: #dcdced;
+      --text: #232538; --prose: #2c2938; --muted: #5c6075;
+      --accent: #4657aa; --accent-text: #fff; --good: #34694f; --bad: #a22b45;
+      --shadow: 0 .25rem 1.25rem #31275b0d;
+      --measure: 46rem;
+      --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      font: 16px/1.55 system-ui, "Segoe UI", sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --page: #171722; --panel: #202130; --soft: #292b43; --line: #3a3d55;
+        --text: #f0eff7; --prose: #eeeaf6; --muted: #b6b8cc;
+        --accent: #bbc5ff; --accent-text: #202b62; --good: #9cd5b5; --bad: #ffa8ba;
+        --shadow: 0 .25rem 1.25rem #07061533;
+      }
+    }
+    * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { display: flex; flex-direction: column; height: 100dvh; min-height: 25rem; margin: 0; background: var(--page); color: var(--text); }
+    h1, h2, h3, h4, p { margin: 0; }
+    .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    .subtle { color: var(--muted); font-size: .82rem; }
+    header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .9rem clamp(.8rem, 3vw, 2.3rem); }
+    .identity, .utilities { display: flex; align-items: center; gap: .65rem; min-width: 0; }
+    .identity h1 { font-size: 1.1rem; font-weight: 660; letter-spacing: -.025em; line-height: 1.2; }
+    .symbol-library { position: absolute; }
+    .mark { display: block; flex: none; width: 2.1rem; aspect-ratio: 1; }
+    #status { font-size: .74rem; color: var(--muted); overflow-wrap: anywhere; }
+    #status::before { display: inline-block; width: .38rem; height: .38rem; margin-right: .35rem; border-radius: 50%; background: currentColor; content: ""; vertical-align: .08em; }
+    #status[data-state="ready"] { color: var(--good); }
+    #status[data-state="error"] { color: var(--bad); }
+    .utility { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: var(--panel); font-size: .82rem; white-space: nowrap; }
+    .utility svg { width: 1rem; height: 1rem; }
+    .utility:not(:disabled):hover, .settings[open] > summary { background: var(--soft); }
+    .settings { position: relative; }
+    .settings > summary { list-style: none; }
+    .settings > summary::-webkit-details-marker { display: none; }
+    .settings-card { position: absolute; top: calc(100% + .5rem); right: 0; width: min(20rem, calc(100vw - 1.6rem)); max-height: calc(100dvh - 5.5rem); overflow: auto; padding: 1rem; border: 1px solid var(--line); border-radius: 1.1rem; background: var(--panel); box-shadow: var(--shadow); }
+    .settings-card h2 { font-size: .95rem; }
+    main, .conversation { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 1.1rem max(1rem, calc((100% - var(--measure)) / 2)) 1.8rem; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; }
+    #transcript:focus-visible { outline-offset: -4px; }
+    .empty { margin: auto 0; padding: 1rem 0 clamp(1rem, 4vh, 3rem); text-align: center; }
+    .empty .mark { width: 2.75rem; margin: 0 auto .9rem; }
+    .empty h2 { font: 400 clamp(2.35rem, 6vw, 4rem)/1.12 var(--serif); letter-spacing: -.045em; color: var(--prose); }
+    .empty p { margin: .8rem auto 0; color: var(--muted); font-size: .95rem; }
+    article { flex: none; min-width: 0; }
+    article + article { margin-top: clamp(1.4rem, 4vh, 2.4rem); }
+    article.user { align-self: flex-end; max-width: min(85%, 37rem); padding: .75rem 1.05rem; border-radius: 1.25rem 1.25rem .4rem 1.25rem; background: var(--soft); }
+    article.assistant { padding-inline: .2rem; }
+    article h3, .answer-title { margin: 0 0 .35rem; font-size: .79rem; font-weight: 650; color: var(--muted); }
+    .message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .assistant > .message-text { color: var(--prose); font: 400 clamp(1.09rem, 2.1vw, 1.27rem)/1.68 var(--serif); }
+    .reasoning { margin: .65rem 0 .95rem; padding: .55rem .8rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--soft); }
+    .reasoning summary { font-size: .88rem; font-weight: 650; }
+    .reasoning[open] summary { margin-bottom: .35rem; }
+    .reasoning .message-text { color: var(--muted); font-size: .88rem; }
+    .reasoning[hidden] + .answer-title { display: none; }
+    .composer { flex: none; width: min(calc(100% - 2rem), var(--measure)); margin: 0 auto .8rem; }
+    .compose { padding: .65rem .7rem .55rem; border: 1px solid var(--line); border-radius: 1.6rem; background: var(--panel); box-shadow: var(--shadow); }
+    .compose:focus-within { border-color: var(--accent); }
+    #prompt { min-height: 3rem; max-height: min(11rem, 28dvh); padding: .35rem .55rem; border: 0; background: transparent; }
+    #prompt:focus-visible { outline: none; }
+    #shortcut { display: block; margin-top: .35rem; text-align: center; font-size: .72rem; }
+    .actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .6rem; margin-top: .3rem; }
+    .model-picker { min-width: 0; max-width: 18rem; }
+    #model { padding: .4rem .65rem; border-radius: 999px; background: var(--soft); font-size: .84rem; text-overflow: ellipsis; }
+    .send-actions { display: flex; align-items: center; gap: .35rem; }
+    summary { cursor: pointer; }
+    .fields { display: grid; gap: .7rem; margin-top: .75rem; }
+    .numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+    label { display: block; font-size: .88rem; font-weight: 600; margin-bottom: .25rem; }
+    label.check { display: flex; align-items: baseline; gap: .4rem; margin: 0; }
+    textarea, input:not([type="checkbox"]), select { width: 100%; }
+    input, select, textarea, button { font: inherit; color: var(--text); }
+    input:not([type="checkbox"]), select, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: .65rem; padding: .45rem .65rem; }
+    textarea { display: block; resize: vertical; }
+    button { cursor: pointer; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); padding: .43rem .75rem; font-size: .86rem; }
+    button:not(:disabled):hover { background: var(--soft); }
+    button.primary { min-width: 4.4rem; border-color: var(--accent); background: var(--accent); color: var(--accent-text); font-weight: 650; }
+    button.primary:not(:disabled):hover { filter: brightness(.93); background: var(--accent); }
+    button:disabled, select:disabled { cursor: default; opacity: .55; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    #error { margin: .35rem .5rem .45rem; color: var(--bad); font-size: .88rem; overflow-wrap: anywhere; }
+    @media (max-width: 29rem) {
+      header { gap: .4rem; }
+      .utilities { gap: .35rem; }
+      .utility { padding-inline: .6rem; }
+      .utility svg { display: none; }
+      .identity { gap: .4rem; }
+      .identity .mark { width: 1.55rem; }
+      #transcript { padding-inline: .75rem; scrollbar-gutter: auto; }
+      .composer { width: calc(100% - 1.4rem); }
+      .compose { border-radius: 1.25rem; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="symbol-library" width="0" height="0" aria-hidden="true">
+    <defs>
+      <linearGradient id="orb" x2="1" y2="1">
+        <stop stop-color="#3156D3"/><stop offset="1" stop-color="#6550CB"/>
+      </linearGradient>
+    </defs>
+    <symbol id="oryndral-mark" viewBox="0 0 256 256">
+      <rect x="12" y="12" width="232" height="232" rx="54" fill="url(#orb)"/>
+      <path d="M170 87A58 58 0 1 0 181 151" fill="none" stroke="#fff" stroke-width="16" stroke-linecap="round"/>
+      <circle cx="184" cy="111" r="9" fill="#D6EAFF"/>
+    </symbol>
+  </svg>
+  <header>
+    <div class="identity">
+      <svg class="mark" aria-hidden="true"><use href="#oryndral-mark"/></svg>
+      <div><h1>Oryndral</h1><p id="status" role="status" aria-live="polite">Connecting…</p></div>
+    </div>
+    <div class="utilities">
+      <button class="utility" type="button" id="clear" disabled>
+        <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M10 4v12M4 10h12"/></svg>
+        New chat
+      </button>
+      <details class="settings" id="settings">
+        <summary class="utility">
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M3 6h14M3 14h14"/><circle cx="7" cy="6" r="2" fill="var(--panel)"/><circle cx="13" cy="14" r="2" fill="var(--panel)"/></svg>
+          Settings
+        </summary>
+        <div class="settings-card">
+          <h2>Session settings</h2>
+          <div class="fields">
+            <div>
+              <label for="system">System message</label>
+              <textarea id="system" rows="3" placeholder="Optional"></textarea>
+            </div>
+            <div class="numbers">
+              <div><label for="temperature">Temperature</label><input id="temperature" form="compose" type="number" min="0" max="2" step="any" value="0.8" required></div>
+              <div><label for="top-p">Top-p</label><input id="top-p" form="compose" type="number" min="0.000001" max="1" step="any" value="0.95" required></div>
+            </div>
+            <div><label for="limit">Max output tokens</label><input id="limit" form="compose" type="number" min="1" max="131072" step="1" value="1024" required></div>
+            <label class="check"><input id="single" type="checkbox"> Send only the latest prompt</label>
+            <p class="subtle">Use a single prompt for base models without chat templates.</p>
+            <button type="button" id="connect">Refresh models</button>
+          </div>
+        </div>
+      </details>
+    </div>
+  </header>
+  <main>
+    <section class="conversation" aria-labelledby="conversation-title">
+      <h2 id="conversation-title" class="sr-only">Conversation</h2>
+      <div id="transcript" role="region" aria-label="Messages" tabindex="0">
+        <div id="empty" class="empty">
+          <svg class="mark" aria-hidden="true"><use href="#oryndral-mark"/></svg>
+          <h2>What’s on your mind?</h2>
+          <p>Start a conversation with your local model.</p>
+        </div>
+      </div>
+      <div class="composer">
+        <form id="compose" class="compose">
+          <label for="prompt" class="sr-only">Message</label>
+          <textarea id="prompt" rows="2" required placeholder="Ask your model…" aria-describedby="shortcut"></textarea>
+          <p id="error" role="alert" hidden></p>
+          <div class="actions">
+            <div class="model-picker">
+              <label for="model" class="sr-only">Model</label>
+              <select id="model" disabled><option value="">Looking for models…</option></select>
+            </div>
+            <div class="send-actions">
+              <button type="button" id="cancel" hidden>Stop</button>
+              <button type="submit" class="primary" id="send" disabled>Send</button>
+            </div>
+          </div>
+        </form>
+        <small id="shortcut" class="subtle">Ctrl or ⌘ + Enter to send</small>
+      </div>
+    </section>
+  </main>
+  <script>
+    "use strict";
+    const byId = (id) => document.getElementById(id);
+    const form = byId("compose"), prompt = byId("prompt"), transcript = byId("transcript");
+    const model = byId("model"), send = byId("send"), clear = byId("clear"), cancel = byId("cancel");
+    const status = byId("status"), error = byId("error"), empty = byId("empty"), connect = byId("connect");
+    const history = [];
+    let active = null;
+    let connecting = false;
+
+    function setStatus(message, state) {
+      status.textContent = message;
+      status.dataset.state = state;
+    }
+
+    function showError(message = "") {
+      error.textContent = message;
+      error.hidden = !message;
+    }
+
+    function controls() {
+      const busy = active !== null;
+      const ready = Boolean(model.value) && !connecting;
+      send.disabled = busy || !ready || !prompt.value.trim();
+      clear.disabled = busy || transcript.childElementCount < 2;
+      connect.disabled = busy || connecting;
+      model.disabled = busy || !ready;
+      cancel.hidden = !busy;
+      cancel.disabled = Boolean(active?.signal.aborted);
+    }
+
+    async function responseError(response) {
+      const data = await response.json().catch(() => null);
+      return data?.error?.message || `The server returned HTTP ${response.status}.`;
+    }
+
+    async function discover() {
+      connecting = true;
+      controls();
+      showError();
+      setStatus("Connecting…", "busy");
+      const previous = model.value;
+      try {
+        const response = await fetch("/v1/models");
+        if (!response.ok) throw new Error(await responseError(response));
+        const { data } = await response.json();
+        const ids = Array.isArray(data) ? data.map((entry) => entry.id).filter((id) => typeof id === "string" && id) : [];
+        if (!ids.length) throw new Error("The server did not list a model.");
+        model.replaceChildren(...ids.map((id) => new Option(id, id)));
+        if (ids.includes(previous)) model.value = previous;
+        setStatus("Ready", "ready");
+      } catch (problem) {
+        model.replaceChildren(new Option("No model available", ""));
+        setStatus("Unavailable", "error");
+        showError(`${problem.message} Check the server and refresh models.`);
+      } finally {
+        connecting = false;
+        controls();
+      }
+    }
+
+    function addMessage(role, text = "") {
+      empty.hidden = true;
+      const article = document.createElement("article");
+      const label = document.createElement("h3");
+      label.textContent = role === "user" ? "You" : "Assistant";
+      article.className = role;
+      article.append(label);
+      const details = document.createElement("details");
+      const reasoning = document.createTextNode("");
+      const pending = document.createElement("p");
+      if (role === "assistant") {
+        const summary = document.createElement("summary");
+        summary.textContent = "Reasoning details";
+        const reasoningText = document.createElement("p");
+        reasoningText.className = "message-text";
+        reasoningText.append(reasoning);
+        details.className = "reasoning";
+        details.hidden = true;
+        details.append(summary, reasoningText);
+        const title = document.createElement("h4");
+        title.textContent = "Answer";
+        title.className = "answer-title";
+        pending.textContent = "Waiting for an answer…";
+        pending.className = "subtle";
+        article.append(details, title, pending);
+      }
+      const body = document.createElement("p");
+      const content = document.createTextNode(text);
+      body.className = "message-text";
+      body.append(content);
+      article.append(body);
+      transcript.append(article);
+      return { article, label, details, content, reasoning, pending };
+    }
+
+    function scrollToLatest() {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+
+    async function readEvents(response, onDelta) {
+      if (!response.body) throw new Error("The browser could not read the response stream.");
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) throw new Error("The server closed the response before completion.");
+          buffer += decoder.decode(value, { stream: true });
+          const events = buffer.split(/\r?\n\r?\n/);
+          buffer = events.pop();
+          for (const event of events) {
+            const data = event.split(/\r?\n/)
+              .filter((line) => line.startsWith("data:"))
+              .map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+            if (!data) continue;
+            if (data === "[DONE]") return;
+            const frame = JSON.parse(data);
+            if (frame.error) throw new Error(frame.error.message || "Generation failed.");
+            if (frame.choices?.[0]?.delta) onDelta(frame.choices[0].delta);
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+    }
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (send.disabled) return;
+      showError();
+      const user = { role: "user", content: prompt.value };
+      const messages = [...history, user];
+      const system = byId("system").value.trim();
+      if (system) messages.unshift({ role: "system", content: system });
+      const single = byId("single").checked;
+      const request = {
+        model: model.value,
+        messages: single ? [user] : messages,
+        temperature: byId("temperature").valueAsNumber,
+        top_p: byId("top-p").valueAsNumber,
+        max_tokens: byId("limit").valueAsNumber,
+        stream: true,
+      };
+      const userView = addMessage("user", user.content);
+      const answer = addMessage("assistant");
+      const controller = new AbortController();
+      active = controller;
+      prompt.value = "";
+      controls();
+      scrollToLatest();
+      setStatus("Generating…", "busy");
+      try {
+        const response = await fetch("/v1/chat/completions", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request), signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(await responseError(response));
+        await readEvents(response, (delta) => {
+          const follow = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
+          if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
+            answer.details.hidden = false;
+            answer.reasoning.appendData(delta.reasoning_content);
+          }
+          if (typeof delta.content === "string" && delta.content) {
+            answer.pending.hidden = true;
+            answer.content.appendData(delta.content);
+          }
+          if (follow) scrollToLatest();
+        });
+        setStatus("Ready", "ready");
+      } catch (problem) {
+        if (controller.signal.aborted) {
+          answer.label.textContent = "Assistant · stopped";
+          setStatus("Generation stopped", "ready");
+        } else {
+          answer.label.textContent = "Assistant · interrupted";
+          showError(problem.message || "Generation failed.");
+          setStatus("Generation interrupted", "error");
+        }
+      } finally {
+        if (answer.content.length) {
+          history.push(user, { role: "assistant", content: answer.content.data });
+        } else if (answer.reasoning.length) {
+          answer.pending.textContent = "No answer was received.";
+        } else {
+          answer.article.remove();
+          userView.article.remove();
+          if (!prompt.value) prompt.value = user.content;
+          empty.hidden = transcript.childElementCount > 1;
+        }
+        active = null;
+        controls();
+        if (document.activeElement === cancel || document.activeElement === document.body) prompt.focus();
+      }
+    });
+
+    connect.addEventListener("click", discover);
+    const settings = byId("settings");
+    settings.addEventListener("invalid", () => { settings.open = true; }, true);
+    cancel.addEventListener("click", () => { active?.abort(); controls(); });
+    clear.addEventListener("click", () => {
+      history.length = 0;
+      transcript.replaceChildren(empty);
+      empty.hidden = false;
+      prompt.value = "";
+      showError();
+      if (model.value) setStatus("Ready", "ready");
+      controls();
+      prompt.focus();
+    });
+    prompt.addEventListener("input", controls);
+    prompt.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" && !event.isComposing && (event.ctrlKey || event.metaKey)) {
+        event.preventDefault();
+        if (!send.disabled) form.requestSubmit();
+      }
+    });
+    discover();
+  </script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+[package]
+name = "oryndral"
+version = "0.3.0"
+edition = "2024"
+license = "MIT"
+description = "Rust-native inference for local GGUF models"
+
+[features]
+default = []
+cuda = ["candle/cuda", "candle-nn/cuda"]
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+candle = { package = "candle-core", version = "=0.11.1" }
+candle-nn = "=0.11.1"
+clap = { version = "4.6", features = ["derive"] }
+hf-hub = { version = "0.4.3", default-features = false, features = ["ureq"] }
+minijinja = { version = "2", features = ["json", "builtins"] }
+minijinja-contrib = { version = "2", features = ["pycompat"] }
+rand = "0.9"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "sync", "macros", "time"] }
+tokio-stream = "0.1"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

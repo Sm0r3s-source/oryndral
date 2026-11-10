@@ -1,0 +1,66 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  cpu:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked
+      - name: Fetch and verify pinned inference fixtures
+        shell: pwsh
+        run: |
+          $fixtures = @(
+            @{ Env = 'ORYNDRAL_TEST_GGUF'; File = 'stories15M-q4_0.gguf'; Url = 'https://huggingface.co/ggml-org/models-moved/resolve/499bc8821c6b12b4e53c5bffcb21ec206f212d81/tinyllamas/stories15M-q4_0.gguf'; Hash = '66967fbece6dbe97886593fdbb73589584927e29119ec31f08090732d1861739' },
+            @{ Env = 'ORYNDRAL_TEST_MOE_GGUF'; File = 'stories15M_MOE-Q8_0.gguf'; Url = 'https://huggingface.co/ggml-org/stories15M_MOE/resolve/b6dd737497465570b5f5e962dbc9d9454ed1e0eb/stories15M_MOE-Q8_0.gguf'; Hash = 'c7aa6863f9a4b3cdf19716e2c95622dcbd3bd06989324bf1ac8e60486ef8e881' }
+          )
+          foreach ($fixture in $fixtures) {
+            $file = Join-Path $env:RUNNER_TEMP $fixture.File
+            Invoke-WebRequest -Uri $fixture.Url -OutFile $file
+            if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $fixture.Hash) {
+              throw "Fixture checksum mismatch for $file"
+            }
+            "$($fixture.Env)=$file" >> $env:GITHUB_ENV
+          }
+      - run: cargo test --release --locked -- --ignored --skip mythos_nano_matches_llama_cpp
+
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release --locked
+      - name: Package the Windows desktop app
+        shell: pwsh
+        run: |
+          $package = Join-Path $env:RUNNER_TEMP 'webview2.nupkg'
+          $sdk = Join-Path $env:RUNNER_TEMP 'webview2-sdk'
+          $references = Join-Path $env:RUNNER_TEMP 'webview2-refs'
+          $app = Join-Path $env:RUNNER_TEMP 'Oryndral-Windows'
+          Invoke-WebRequest -Uri 'https://api.nuget.org/v3-flatcontainer/microsoft.web.webview2/1.0.2903.40/microsoft.web.webview2.1.0.2903.40.nupkg' -OutFile $package
+          $hash = (Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash
+          if ($hash -ne 'EF128016DD1E51C59178C827ED5B8AA3322C57AFA8675D930F8109505542AD74') {
+            throw 'WebView2 SDK checksum mismatch'
+          }
+          New-Item -ItemType Directory -Force $sdk,$references | Out-Null
+          tar -xf $package -C $sdk
+          if ($LASTEXITCODE) { throw 'Could not extract the WebView2 SDK' }
+          Copy-Item "$sdk/lib/net462/Microsoft.Web.WebView2.*.dll" $references
+          Copy-Item "$sdk/runtimes/win-x64/native/WebView2Loader.dll" $references
+          ./desktop/build.ps1 -OutDir $app -WebView2Directory $references
+          New-Item -ItemType Directory -Force "$app/engine/cpu" | Out-Null
+          Copy-Item 'target/release/oryndral.exe' "$app/engine/cpu"
+          Copy-Item "$sdk/LICENSE.txt" "$app/LICENSE-WebView2.txt"
+          Copy-Item 'LICENSE' "$app/LICENSE-Oryndral.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Oryndral-Windows-x64
+          path: ${{ runner.temp }}/Oryndral-Windows
