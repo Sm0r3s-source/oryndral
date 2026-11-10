@@ -1,5 +1,5 @@
 use anyhow::{Context, Result, ensure};
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand};
 use serde_json::json;
 use std::{
     io::{self, Write},
@@ -57,25 +57,6 @@ enum Command {
     Hardware,
 }
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Execution {
-    Resident,
-    Hybrid,
-    DenseStream,
-    MoeStream,
-}
-
-impl From<Execution> for Mode {
-    fn from(value: Execution) -> Self {
-        match value {
-            Execution::Resident => Self::Resident,
-            Execution::Hybrid => Self::Hybrid,
-            Execution::DenseStream => Self::DenseStream,
-            Execution::MoeStream => Self::MoeStream,
-        }
-    }
-}
-
 #[derive(Args)]
 struct Load {
     /// Defaults to the model context or 2048, whichever is smaller.
@@ -85,7 +66,7 @@ struct Load {
     #[arg(long)]
     threads: Option<usize>,
     #[arg(long, value_enum, default_value = "resident")]
-    mode: Execution,
+    mode: Mode,
     /// Number of trailing transformer blocks on CUDA. Hybrid can select automatically.
     #[arg(long)]
     gpu_layers: Option<usize>,
@@ -163,9 +144,13 @@ fn main() -> Result<()> {
             bind,
             model_id,
         } => {
+            // Checked before the model loads so a bad address fails immediately.
             ensure!(bind.ip().is_loopback(), "bind address must be loopback");
             let path = hub.resolve(model)?;
-            let id = model_id.unwrap_or_else(|| model_id_from(&path));
+            let id = model_id.unwrap_or_else(|| {
+                let stem = path.file_stem().and_then(|p| p.to_str());
+                stem.unwrap_or("oryndral").to_owned()
+            });
             ensure!(!id.trim().is_empty(), "model ID must not be empty");
             eprintln!("Loading {id} from {}", path.display());
             let (engine, _, _) = open_engine(&path, &load)?;
@@ -178,13 +163,6 @@ fn main() -> Result<()> {
     }
 }
 
-fn model_id_from(path: &Path) -> String {
-    path.file_stem()
-        .and_then(|p| p.to_str())
-        .unwrap_or("oryndral")
-        .to_owned()
-}
-
 fn bytes(mib: u64) -> Result<u64> {
     mib.checked_mul(1024 * 1024)
         .context("MiB budget is too large")
@@ -193,7 +171,7 @@ fn bytes(mib: u64) -> Result<u64> {
 fn prepare(path: &Path, load: &Load) -> Result<(ModelFile, usize, Plan, ExpertOptions)> {
     let file = ModelFile::open(path)?;
     let context = load.context.unwrap_or(file.config.context.min(2048));
-    let mode = Mode::from(load.mode);
+    let mode = load.mode;
     ensure!(
         (load.expert_cache_mib == 0 && load.expert_cache_policy == CachePolicy::Lru)
             || mode == Mode::MoeStream,
@@ -232,20 +210,16 @@ fn prepare(path: &Path, load: &Load) -> Result<(ModelFile, usize, Plan, ExpertOp
     Ok((file, context, plan, experts))
 }
 
-fn threads(load: &Load) -> usize {
-    load.threads.unwrap_or_else(|| {
-        std::thread::available_parallelism().map_or(1, |n| usize::from(n).min(4))
-    })
-}
-
 fn open_engine(path: &Path, load: &Load) -> Result<(Engine, serde_json::Value, f64)> {
     let start = Instant::now();
-    let hybrid = Mode::from(load.mode) == Mode::Hybrid && load.gpu_layers != Some(0);
+    let hybrid = load.mode == Mode::Hybrid && load.gpu_layers != Some(0);
     ensure!(
         cfg!(feature = "cuda") || (!hybrid && load.gpu_layers.unwrap_or(0) == 0),
         "this executable was built for CPU inference. Build with --features cuda for GPU offload"
     );
-    let threads = threads(load);
+    let threads = load.threads.unwrap_or_else(|| {
+        std::thread::available_parallelism().map_or(1, |n| usize::from(n).min(4))
+    });
     ensure!((1..=1024).contains(&threads), "threads must be in 1..=1024");
     // Candle also reads this at GEMM call sites, so set it before spawning threads.
     unsafe {
@@ -296,12 +270,13 @@ fn generate(args: Generate, benchmark: bool) -> Result<()> {
     } else {
         args.prompt
     };
+    let ids = engine.tokenize(&prompt)?;
     let load_io = engine.load_io();
     let before_io = benchmark.then(planner::process_io);
     let stdout = io::stdout();
     let mut output = stdout.lock();
     let mut error = None;
-    let result = engine.generate(&prompt, &sampling, |text| {
+    let result = engine.generate(ids, &sampling, |text| {
         if benchmark || text.is_empty() {
             return true;
         }

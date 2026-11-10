@@ -1,8 +1,10 @@
 # Oryndral Desktop for Windows
 
-Open **Oryndral Desktop.exe**, select a single-file GGUF model, pick CPU or NVIDIA CUDA, then click **Start server**. The existing Oryndral chat opens in the desktop window. **Copy API address** provides the loopback URL for other OpenAI-compatible clients. **Stop server** and closing the window stop the engine started by this instance.
+Open **Oryndral Desktop.exe**, click **Choose model…** to pick a single-file GGUF, select **CPU** or **NVIDIA GPU**, then click **Start server**. The Oryndral chat opens in the desktop window. **Copy API address** provides the loopback URL for other OpenAI-compatible clients. **Stop server** and closing the window stop the engine started by this instance. If the engine fails to load a model, its error appears in the main pane and in **Server log**.
 
-The app uses the Microsoft Edge WebView2 Runtime already installed on supported Windows systems. It binds the engine to a free loopback port. No external service is needed for a model already on disk.
+The window follows the Windows light or dark app theme and uses the same colors as the chat page. Links in a reply open in the default browser.
+
+The app uses the Microsoft Edge WebView2 Runtime already installed on supported Windows systems. It binds the engine to loopback port 8177, so the API address and the chat's saved settings stay the same between runs. If that port is in use, the engine takes any free port. No external service is needed for a model already on disk.
 
 ## Build and package
 

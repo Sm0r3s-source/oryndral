@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use axum::extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -17,19 +17,15 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
-use crate::generation::{Engine, Finish, Generation, Message, Sampling};
+use crate::generation::{Engine, Finish, Generation, Message, Sampling, THINK_MARKERS};
 
 const REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const STREAM_BUFFER_EVENTS: usize = 16;
 const PENDING_JOBS: usize = 4;
 const DEFAULT_OUTPUT_TOKENS: usize = 1024;
 
+/// The caller validates `bind` and `model_id` before loading the model.
 pub async fn serve(engine: Engine, bind: SocketAddr, model_id: String) -> Result<()> {
-    ensure!(
-        bind.ip().is_loopback(),
-        "the API only accepts loopback bind addresses"
-    );
-    ensure!(!model_id.trim().is_empty(), "model ID cannot be empty");
     let listener = TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
@@ -244,7 +240,8 @@ impl CompletionRequest {
             temperature: self.temperature.unwrap_or(defaults.temperature),
             top_p: self.top_p.unwrap_or(defaults.top_p),
             top_k: self.top_k.or(defaults.top_k),
-            seed: self.seed.map_or(defaults.seed, |seed| seed as u64),
+            // Like the OpenAI API, a request without a seed gets a fresh one.
+            seed: self.seed.map_or_else(rand::random, |seed| seed as u64),
             stop,
         };
         sampling
@@ -470,11 +467,8 @@ fn serve_job(engine: &mut Engine, job: Job) {
         Input::Messages(messages) => (engine.chat_prompt(&messages), "messages"),
         Input::Prompt(prompt) => (Ok(prompt), "prompt"),
     };
-    let prompt = match prompt.and_then(|prompt| {
-        engine.validate_prompt(&prompt, &sampling)?;
-        Ok(prompt)
-    }) {
-        Ok(prompt) => prompt,
+    let ids = match prompt.and_then(|prompt| engine.tokenize(&prompt)) {
+        Ok(ids) => ids,
         Err(error) => {
             let _ = reply.send(Err(ApiError::invalid(error.to_string()).param(param)));
             return;
@@ -485,7 +479,7 @@ fn serve_job(engine: &mut Engine, job: Job) {
     if !stream {
         if !reply.is_closed() {
             let result = engine
-                .generate(&prompt, &sampling, |_| !reply.is_closed())
+                .generate(ids, &sampling, |_| !reply.is_closed())
                 .map_err(ApiError::inference)
                 .and_then(|generation| completion.full(generation, separate_reasoning));
             let _ = reply.send(result.map(Reply::Full));
@@ -504,7 +498,7 @@ fn serve_job(engine: &mut Engine, job: Job) {
 
     let mut split = ReasoningSplit::new(separate_reasoning);
     let mut emit = |field, piece: &str| send(completion.chunk(field, piece, None, include_usage));
-    let result = engine.generate(&prompt, &sampling, |piece| {
+    let result = engine.generate(ids, &sampling, |piece| {
         !sender.is_closed() && split.push(piece, &mut emit)
     });
     match result {
@@ -635,8 +629,8 @@ struct ReasoningSplit {
 }
 
 impl ReasoningSplit {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
+    const OPEN: &str = THINK_MARKERS[0];
+    const CLOSE: &str = THINK_MARKERS[1];
 
     fn new(enabled: bool) -> Self {
         Self {
@@ -1035,6 +1029,18 @@ mod tests {
     }
 
     #[test]
+    fn seed_is_random_unless_the_request_sets_one() {
+        let seed = |payload: Value| {
+            let mut request: CompletionRequest = serde_json::from_value(payload).unwrap();
+            request.sampling(Kind::Text).unwrap().seed
+        };
+        assert_eq!(seed(json!({"prompt": "Hi", "seed": 7})), 7);
+        let drawn: std::collections::HashSet<_> =
+            (0..4).map(|_| seed(json!({"prompt": "Hi"}))).collect();
+        assert!(drawn.len() > 1, "unseeded requests repeated seed {drawn:?}");
+    }
+
+    #[test]
     fn cancelled_reasoning_does_not_emit_answer() {
         let mut split = ReasoningSplit::new(true);
         assert!(split.push(" \n<thi", |_, _| panic!(
@@ -1054,21 +1060,12 @@ mod tests {
         use std::path::PathBuf;
 
         use crate::model::ModelFile;
-        use crate::planner::{Mode, PlanOptions, plan};
+        use crate::planner::{PlanOptions, plan};
 
         let path = PathBuf::from(std::env::var_os("ORYNDRAL_TEST_GGUF").unwrap());
         let context = 128;
         let file = ModelFile::open(&path).unwrap();
-        let placement = plan(
-            &file.memory(context, 0).unwrap(),
-            PlanOptions {
-                mode: Mode::Resident,
-                gpu_layers: None,
-                ram_budget: None,
-                vram_budget: None,
-            },
-        )
-        .unwrap();
+        let placement = plan(&file.memory(context, 0).unwrap(), PlanOptions::default()).unwrap();
         let engine =
             Engine::load(file, placement, context, 0, Default::default(), None, None).unwrap();
         let (sender, receiver) = mpsc::channel(1);

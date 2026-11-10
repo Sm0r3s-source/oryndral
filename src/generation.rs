@@ -10,7 +10,8 @@ use serde::Serialize;
 use std::{collections::HashSet, path::Path, time::Instant};
 use tokenizers::Tokenizer;
 
-const THINK_MARKERS: [&str; 2] = ["<think>", "</think>"];
+/// Opening and closing tags of a reasoning block.
+pub const THINK_MARKERS: [&str; 2] = ["<think>", "</think>"];
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Message {
@@ -197,17 +198,8 @@ impl Engine {
         self.think_ids.iter().all(Option::is_some)
     }
 
+    /// Callers supply a nonempty list of system, user and assistant messages.
     pub fn chat_prompt(&self, messages: &[Message]) -> Result<String> {
-        ensure!(
-            !messages.is_empty(),
-            "messages must contain at least one message"
-        );
-        ensure!(
-            messages
-                .iter()
-                .all(|m| matches!(m.role.as_str(), "system" | "user" | "assistant")),
-            "supported roles are system, user and assistant"
-        );
         if let Some(template) = &self.template {
             let mut env = template_environment();
             env.add_template("chat", template)?;
@@ -228,8 +220,8 @@ impl Engine {
         Ok(messages[0].content.clone())
     }
 
-    fn prompt_ids(&self, prompt: &str, sampling: &Sampling) -> Result<Vec<u32>> {
-        sampling.validate()?;
+    /// Encode a prompt, adding BOS where the model expects it, and check it fits the context.
+    pub fn tokenize(&self, prompt: &str) -> Result<Vec<u32>> {
         let mut ids = self
             .tokenizer
             .encode(prompt, false)
@@ -249,18 +241,14 @@ impl Engine {
         Ok(ids)
     }
 
-    pub fn validate_prompt(&self, prompt: &str, sampling: &Sampling) -> Result<()> {
-        self.prompt_ids(prompt, sampling).map(|_| ())
-    }
-
+    /// Generate from `tokenize` output with sampling settings that passed `Sampling::validate`.
     pub fn generate(
         &mut self,
-        prompt: &str,
+        ids: Vec<u32>,
         sampling: &Sampling,
         mut emit: impl FnMut(&str) -> bool,
     ) -> Result<Generation> {
         let started = Instant::now();
-        let ids = self.prompt_ids(prompt, sampling)?;
         let before = self.model.stats();
         let mut state = self.model.session();
         let mut logits = None;
