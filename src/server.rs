@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result};
 use axum::extract::{DefaultBodyLimit, Path, State, rejection::JsonRejection};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
@@ -17,23 +17,22 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 use tokio_stream::{StreamExt, wrappers::ReceiverStream};
 
-use crate::generation::{Engine, Finish, Generation, Message, Sampling};
+use crate::generation::{
+    ChatOptions, Engine, Finish, Generation, Message, Sampling, THINK_MARKERS,
+};
 
 const REQUEST_BODY_BYTES: usize = 1024 * 1024;
 const STREAM_BUFFER_EVENTS: usize = 16;
 const PENDING_JOBS: usize = 4;
 const DEFAULT_OUTPUT_TOKENS: usize = 1024;
 
+/// The caller validates `bind` and `model_id` before loading the model.
 pub async fn serve(engine: Engine, bind: SocketAddr, model_id: String) -> Result<()> {
-    ensure!(
-        bind.ip().is_loopback(),
-        "the API only accepts loopback bind addresses"
-    );
-    ensure!(!model_id.trim().is_empty(), "model ID cannot be empty");
     let listener = TcpListener::bind(bind)
         .await
         .with_context(|| format!("bind {bind}"))?;
     let (jobs, receiver) = mpsc::channel(PENDING_JOBS);
+    let reasoning = engine.separates_reasoning();
     std::thread::Builder::new()
         .name("oryndral-inference".into())
         .spawn(move || worker(engine, receiver))
@@ -42,7 +41,7 @@ pub async fn serve(engine: Engine, bind: SocketAddr, model_id: String) -> Result
     let address = listener.local_addr()?;
     eprintln!("Oryndral serving {model_id} at http://{address}/v1");
     eprintln!("Open browser chat at http://{address}/");
-    axum::serve(listener, router(model_id, jobs))
+    axum::serve(listener, router(model_id, reasoning, jobs))
         .with_graceful_shutdown(async {
             if let Err(error) = tokio::signal::ctrl_c().await {
                 eprintln!("Failed to listen for Ctrl+C: {error}");
@@ -55,12 +54,14 @@ pub async fn serve(engine: Engine, bind: SocketAddr, model_id: String) -> Result
 #[derive(Clone)]
 struct App {
     model: Arc<str>,
+    /// The model marks its reasoning with think tags, so thinking can be switched per request.
+    reasoning: bool,
     created: u64,
     sequence: Arc<AtomicU64>,
     jobs: mpsc::Sender<Job>,
 }
 
-fn router(model: String, jobs: mpsc::Sender<Job>) -> Router {
+fn router(model: String, reasoning: bool, jobs: mpsc::Sender<Job>) -> Router {
     Router::new()
         .route("/", get(|| async { Html(include_str!("web_chat.html")) }))
         .route("/v1", get(open_chat))
@@ -88,6 +89,7 @@ fn router(model: String, jobs: mpsc::Sender<Job>) -> Router {
         .layer(DefaultBodyLimit::max(REQUEST_BODY_BYTES))
         .with_state(App {
             model: model.into(),
+            reasoning,
             created: unix_seconds(),
             sequence: Arc::new(AtomicU64::new(1)),
             jobs,
@@ -116,7 +118,7 @@ impl App {
 
     fn model_info(&self) -> Value {
         json!({"id": self.model.as_ref(), "object": "model", "created": self.created,
-            "owned_by": "oryndral"})
+            "owned_by": "oryndral", "reasoning": self.reasoning})
     }
 }
 
@@ -162,6 +164,8 @@ struct CompletionRequest {
     frequency_penalty: Option<f64>,
     presence_penalty: Option<f64>,
     logprobs: Option<Value>,
+    chat_template_kwargs: Option<serde_json::Map<String, Value>>,
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -204,7 +208,7 @@ enum Kind {
 }
 
 enum Input {
-    Messages(Vec<Message>),
+    Messages(Vec<Message>, ChatOptions),
     Prompt(String),
 }
 
@@ -244,7 +248,8 @@ impl CompletionRequest {
             temperature: self.temperature.unwrap_or(defaults.temperature),
             top_p: self.top_p.unwrap_or(defaults.top_p),
             top_k: self.top_k.or(defaults.top_k),
-            seed: self.seed.map_or(defaults.seed, |seed| seed as u64),
+            // Like the OpenAI API, a request without a seed gets a fresh one.
+            seed: self.seed.map_or_else(rand::random, |seed| seed as u64),
             stop,
         };
         sampling
@@ -272,6 +277,32 @@ impl CompletionRequest {
                     .param("prompt"),
             );
         }
+        let template = self.chat_template_kwargs.unwrap_or_default();
+        // `enable_thinking` is the llama.cpp spelling and `reasoning_effort` the OpenAI one.
+        // A reasoning model thinks unless told otherwise. Opening its reasoning block for it
+        // keeps the reasoning out of the answer when the model would have skipped the tag.
+        let thinking = match (
+            template.get("enable_thinking"),
+            self.reasoning_effort.as_deref(),
+        ) {
+            (Some(Value::Bool(enabled)), _) => *enabled,
+            (Some(_), _) => {
+                return Err(ApiError::invalid("enable_thinking must be true or false")
+                    .param("chat_template_kwargs"));
+            }
+            (None, Some("none")) => false,
+            (None, None | Some("minimal" | "low" | "medium" | "high")) => true,
+            (None, Some(_)) => {
+                return Err(ApiError::invalid(
+                    "reasoning_effort must be none, minimal, low, medium or high",
+                )
+                .param("reasoning_effort"));
+            }
+        };
+        let options = ChatOptions {
+            template,
+            thinking: Some(thinking),
+        };
         let messages = self
             .messages
             .filter(|messages| !messages.is_empty())
@@ -297,7 +328,7 @@ impl CompletionRequest {
                 })
             })
             .collect::<Result<Vec<_>, _>>()
-            .map(Input::Messages)
+            .map(|messages| Input::Messages(messages, options))
     }
 }
 
@@ -467,27 +498,34 @@ fn serve_job(engine: &mut Engine, job: Job) {
         reply,
     } = job;
     let (prompt, param) = match input {
-        Input::Messages(messages) => (engine.chat_prompt(&messages), "messages"),
+        Input::Messages(messages, options) => (engine.chat_prompt(&messages, &options), "messages"),
         Input::Prompt(prompt) => (Ok(prompt), "prompt"),
     };
-    let prompt = match prompt.and_then(|prompt| {
-        engine.validate_prompt(&prompt, &sampling)?;
-        Ok(prompt)
+    let separate_reasoning = completion.kind == Kind::Chat && engine.separates_reasoning();
+    // A prompt that ends by opening a reasoning block makes the reply start inside it.
+    let mut opened = "";
+    let ids = match prompt.and_then(|prompt| {
+        if separate_reasoning && prompt.trim_end().ends_with(ReasoningSplit::OPEN) {
+            opened = ReasoningSplit::OPEN;
+        }
+        engine.tokenize(&prompt)
     }) {
-        Ok(prompt) => prompt,
+        Ok(ids) => ids,
         Err(error) => {
             let _ = reply.send(Err(ApiError::invalid(error.to_string()).param(param)));
             return;
         }
     };
-    let separate_reasoning = completion.kind == Kind::Chat && engine.separates_reasoning();
 
     if !stream {
         if !reply.is_closed() {
             let result = engine
-                .generate(&prompt, &sampling, |_| !reply.is_closed())
+                .generate(ids, &sampling, |_| !reply.is_closed())
                 .map_err(ApiError::inference)
-                .and_then(|generation| completion.full(generation, separate_reasoning));
+                .and_then(|mut generation| {
+                    generation.text.insert_str(0, opened);
+                    completion.full(generation, separate_reasoning)
+                });
             let _ = reply.send(result.map(Reply::Full));
         }
         return;
@@ -504,7 +542,8 @@ fn serve_job(engine: &mut Engine, job: Job) {
 
     let mut split = ReasoningSplit::new(separate_reasoning);
     let mut emit = |field, piece: &str| send(completion.chunk(field, piece, None, include_usage));
-    let result = engine.generate(&prompt, &sampling, |piece| {
+    split.push(opened, &mut emit);
+    let result = engine.generate(ids, &sampling, |piece| {
         !sender.is_closed() && split.push(piece, &mut emit)
     });
     match result {
@@ -635,8 +674,8 @@ struct ReasoningSplit {
 }
 
 impl ReasoningSplit {
-    const OPEN: &str = "<think>";
-    const CLOSE: &str = "</think>";
+    const OPEN: &str = THINK_MARKERS[0];
+    const CLOSE: &str = THINK_MARKERS[1];
 
     fn new(enabled: bool) -> Self {
         Self {
@@ -822,7 +861,7 @@ mod tests {
     #[tokio::test]
     async fn models_and_api_errors_are_json() {
         let (sender, receiver) = mpsc::channel(1);
-        let app = router("example".into(), sender);
+        let app = router("example".into(), false, sender);
         let response = get_at(&app, "/v1/models").await;
         assert_eq!(response.status(), StatusCode::OK);
         let list: Value = serde_json::from_str(&body(response).await).unwrap();
@@ -864,7 +903,7 @@ mod tests {
     #[tokio::test]
     async fn home_and_health_routes() {
         let (sender, receiver) = mpsc::channel(1);
-        let app = router("example".into(), sender);
+        let app = router("example".into(), false, sender);
         let page = get_at(&app, "/").await;
         assert_eq!(page.status(), StatusCode::OK);
         assert_eq!(
@@ -892,13 +931,13 @@ mod tests {
     #[tokio::test]
     async fn sse_framing_and_busy_response() {
         let (sender, mut jobs) = mpsc::channel(1);
-        let app = router("example".into(), sender);
+        let app = router("example".into(), false, sender);
         let mut payload = request(true);
         payload["stream_options"] = json!({"include_usage": true});
         let task = tokio::spawn(post(app.clone(), payload));
         let job = jobs.recv().await.unwrap();
         assert!(job.stream && job.include_usage);
-        let Input::Messages(messages) = &job.input else {
+        let Input::Messages(messages, _) = &job.input else {
             panic!("expected a chat job")
         };
         assert_eq!(messages[0].role, "user");
@@ -961,7 +1000,7 @@ mod tests {
     #[tokio::test]
     async fn dropping_response_signals_stream_cancellation() {
         let (sender, mut jobs) = mpsc::channel(1);
-        let task = tokio::spawn(post(router("example".into(), sender), request(true)));
+        let task = tokio::spawn(post(router("example".into(), false, sender), request(true)));
         let job = jobs.recv().await.unwrap();
         let (events, receiver) = mpsc::channel(1);
         assert!(job.reply.send(Ok(Reply::Stream(receiver))).is_ok());
@@ -1035,6 +1074,71 @@ mod tests {
     }
 
     #[test]
+    fn seed_is_random_unless_the_request_sets_one() {
+        let seed = |payload: Value| {
+            let mut request: CompletionRequest = serde_json::from_value(payload).unwrap();
+            request.sampling(Kind::Text).unwrap().seed
+        };
+        assert_eq!(seed(json!({"prompt": "Hi", "seed": 7})), 7);
+        let drawn: std::collections::HashSet<_> =
+            (0..4).map(|_| seed(json!({"prompt": "Hi"}))).collect();
+        assert!(drawn.len() > 1, "unseeded requests repeated seed {drawn:?}");
+    }
+
+    #[test]
+    fn thinking_setting_is_read_from_either_spelling() {
+        let thinking = |extra: Value| {
+            let mut payload = request(false);
+            payload
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            let request: CompletionRequest = serde_json::from_value(payload).unwrap();
+            request.into_input(Kind::Chat).map(|input| match input {
+                Input::Messages(_, options) => (options.thinking, options.template.len()),
+                Input::Prompt(_) => unreachable!(),
+            })
+        };
+        assert_eq!(thinking(json!({})).unwrap(), (Some(true), 0));
+        let kwargs = json!({"chat_template_kwargs": {"enable_thinking": false, "other": 1}});
+        assert_eq!(thinking(kwargs).unwrap(), (Some(false), 2));
+        assert_eq!(
+            thinking(json!({"reasoning_effort": "none"})).unwrap().0,
+            Some(false)
+        );
+        assert_eq!(
+            thinking(json!({"reasoning_effort": "low"})).unwrap().0,
+            Some(true)
+        );
+        // What Hinoko sends with Think set to Off: the template setting decides.
+        let both =
+            json!({"reasoning_effort": "high", "chat_template_kwargs": {"enable_thinking": false}});
+        assert_eq!(thinking(both).unwrap().0, Some(false));
+        assert!(thinking(json!({"reasoning_effort": "max"})).is_err());
+        assert!(thinking(json!({"chat_template_kwargs": {"enable_thinking": "no"}})).is_err());
+    }
+
+    #[test]
+    fn reply_that_starts_inside_a_reasoning_block_is_split() {
+        let mut split = ReasoningSplit::new(true);
+        let mut emitted = Vec::new();
+        let mut emit = |field: ChatField, piece: &str| {
+            emitted.push((field.key(), piece.to_owned()));
+            true
+        };
+        assert!(split.push(ReasoningSplit::OPEN, &mut emit));
+        assert!(split.push("trace</think>answer", &mut emit));
+        assert!(split.finish(emit));
+        assert_eq!(
+            emitted,
+            [
+                ("reasoning_content", "trace".to_owned()),
+                ("content", "answer".to_owned())
+            ]
+        );
+    }
+
+    #[test]
     fn cancelled_reasoning_does_not_emit_answer() {
         let mut split = ReasoningSplit::new(true);
         assert!(split.push(" \n<thi", |_, _| panic!(
@@ -1054,26 +1158,17 @@ mod tests {
         use std::path::PathBuf;
 
         use crate::model::ModelFile;
-        use crate::planner::{Mode, PlanOptions, plan};
+        use crate::planner::{PlanOptions, plan};
 
         let path = PathBuf::from(std::env::var_os("ORYNDRAL_TEST_GGUF").unwrap());
         let context = 128;
         let file = ModelFile::open(&path).unwrap();
-        let placement = plan(
-            &file.memory(context, 0).unwrap(),
-            PlanOptions {
-                mode: Mode::Resident,
-                gpu_layers: None,
-                ram_budget: None,
-                vram_budget: None,
-            },
-        )
-        .unwrap();
+        let placement = plan(&file.memory(context, 0).unwrap(), PlanOptions::default()).unwrap();
         let engine =
             Engine::load(file, placement, context, 0, Default::default(), None, None).unwrap();
         let (sender, receiver) = mpsc::channel(1);
         let model_worker = std::thread::spawn(move || worker(engine, receiver));
-        let app = router("example".into(), sender);
+        let app = router("example".into(), false, sender);
 
         let mut payload = request(false);
         payload["messages"][0]["content"] = json!("Once upon a time");

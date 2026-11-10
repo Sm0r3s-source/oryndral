@@ -1,5 +1,5 @@
 use crate::model::{
-    Architecture, ExpertOptions, IoStats, Model, ModelFile, PREFILL_BATCH, get_usize,
+    Architecture, ExpertOptions, IoStats, Model, ModelFile, PREFILL_BATCH, Session, get_usize,
 };
 use crate::planner::Plan;
 use anyhow::{Context, Result, anyhow, ensure};
@@ -10,12 +10,24 @@ use serde::Serialize;
 use std::{collections::HashSet, path::Path, time::Instant};
 use tokenizers::Tokenizer;
 
-const THINK_MARKERS: [&str; 2] = ["<think>", "</think>"];
+/// Opening and closing tags of a reasoning block.
+pub const THINK_MARKERS: [&str; 2] = ["<think>", "</think>"];
+const THINK_OPEN: &str = "<think>";
+const THINK_SKIP: &str = "<think>\n\n</think>\n\n";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Message {
     pub role: String,
     pub content: String,
+}
+
+/// Per-request settings for rendering a chat prompt.
+#[derive(Clone, Debug, Default)]
+pub struct ChatOptions {
+    /// Extra chat template variables, such as `enable_thinking`.
+    pub template: serde_json::Map<String, serde_json::Value>,
+    /// Whether a reasoning model thinks before it answers. `None` leaves that to the model.
+    pub thinking: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -84,6 +96,8 @@ pub struct Metrics {
 pub struct Generation {
     pub text: String,
     pub prompt_tokens: usize,
+    /// Leading prompt tokens whose attention state was reused from the previous generation.
+    pub cached_prompt_tokens: usize,
     pub completion_tokens: usize,
     pub prompt_token_ids: Vec<u32>,
     pub completion_token_ids: Vec<u32>,
@@ -102,6 +116,9 @@ pub struct Engine {
     template: Option<String>,
     add_bos: bool,
     context: usize,
+    /// The tokens of the last generation and the attention state they left behind.
+    /// A prompt that starts with the same tokens continues from that state.
+    cache: Option<(Vec<u32>, Session)>,
 }
 
 impl Engine {
@@ -190,36 +207,49 @@ impl Engine {
             template,
             add_bos,
             context,
+            cache: None,
         })
+    }
+
+    /// A session holding the longest reusable prefix of `ids`, and that prefix's length.
+    /// At least one token is left to evaluate, since its logits start the reply.
+    fn resume(&mut self, ids: &[u32]) -> Result<(Session, usize)> {
+        let Some((seen, mut session)) = self.cache.take() else {
+            return Ok((self.model.session(), 0));
+        };
+        let shared = seen.iter().zip(ids).take_while(|(a, b)| a == b).count();
+        let shared = shared.min(ids.len() - 1);
+        session.truncate(shared)?;
+        Ok((session, shared))
     }
 
     pub fn separates_reasoning(&self) -> bool {
         self.think_ids.iter().all(Option::is_some)
     }
 
-    pub fn chat_prompt(&self, messages: &[Message]) -> Result<String> {
-        ensure!(
-            !messages.is_empty(),
-            "messages must contain at least one message"
-        );
-        ensure!(
-            messages
-                .iter()
-                .all(|m| matches!(m.role.as_str(), "system" | "user" | "assistant")),
-            "supported roles are system, user and assistant"
-        );
+    /// Callers supply a nonempty list of system, user and assistant messages.
+    pub fn chat_prompt(&self, messages: &[Message], options: &ChatOptions) -> Result<String> {
         if let Some(template) = &self.template {
             let mut env = template_environment();
             env.add_template("chat", template)?;
-            return env
+            let mut context = options.template.clone();
+            context.insert("messages".into(), serde_json::to_value(messages)?);
+            context.insert("bos_token".into(), self.bos_text.as_str().into());
+            context.insert("eos_token".into(), self.eos_text.as_str().into());
+            context.insert("add_generation_prompt".into(), true.into());
+            let mut prompt = env
                 .get_template("chat")?
-                .render(minijinja::context! {
-                    messages => messages,
-                    bos_token => self.bos_text,
-                    eos_token => self.eos_text,
-                    add_generation_prompt => true,
-                })
-                .context("render chat template");
+                .render(context)
+                .context("render chat template")?;
+            // A template that reads `enable_thinking` ends the prompt with a think tag itself.
+            // For the others, start the reply with an open or an empty reasoning block.
+            let tagged = THINK_MARKERS.iter().any(|m| prompt.trim_end().ends_with(m));
+            if let (Some(thinking), true, false) =
+                (options.thinking, self.separates_reasoning(), tagged)
+            {
+                prompt.push_str(if thinking { THINK_OPEN } else { THINK_SKIP });
+            }
+            return Ok(prompt);
         }
         ensure!(
             messages.len() == 1 && messages[0].role == "user",
@@ -228,8 +258,8 @@ impl Engine {
         Ok(messages[0].content.clone())
     }
 
-    fn prompt_ids(&self, prompt: &str, sampling: &Sampling) -> Result<Vec<u32>> {
-        sampling.validate()?;
+    /// Encode a prompt, adding BOS where the model expects it, and check it fits the context.
+    pub fn tokenize(&self, prompt: &str) -> Result<Vec<u32>> {
         let mut ids = self
             .tokenizer
             .encode(prompt, false)
@@ -249,32 +279,29 @@ impl Engine {
         Ok(ids)
     }
 
-    pub fn validate_prompt(&self, prompt: &str, sampling: &Sampling) -> Result<()> {
-        self.prompt_ids(prompt, sampling).map(|_| ())
-    }
-
+    /// Generate from `tokenize` output with sampling settings that passed `Sampling::validate`.
     pub fn generate(
         &mut self,
-        prompt: &str,
+        ids: Vec<u32>,
         sampling: &Sampling,
         mut emit: impl FnMut(&str) -> bool,
     ) -> Result<Generation> {
         let started = Instant::now();
-        let ids = self.prompt_ids(prompt, sampling)?;
         let before = self.model.stats();
-        let mut state = self.model.session();
+        // The cache is empty from here until the generation ends without an error, so a
+        // failed forward pass cannot leave a half-updated session behind.
+        let (mut state, cached) = self.resume(&ids)?;
         let mut logits = None;
         let mut finish = Finish::Length;
         let mut prefilled = 0;
-        for batch in ids.chunks(PREFILL_BATCH) {
+        for batch in ids[cached..].chunks(PREFILL_BATCH) {
             if !emit("") {
                 finish = Finish::Cancelled;
                 break;
             }
             prefilled += batch.len();
-            logits = self
-                .model
-                .forward(batch, &mut state, prefilled == ids.len())?;
+            let last = cached + prefilled == ids.len();
+            logits = self.model.forward(batch, &mut state, last)?;
         }
         let prefill = started.elapsed().as_secs_f64();
         let limit = sampling.max_tokens.min(self.context - ids.len());
@@ -348,9 +375,15 @@ impl Engine {
             .map_or(0., |(last, first)| last - first);
         let decode_rate = (decode > 0.).then(|| (tokens.len() - 1) as f64 / decode);
         let after = self.model.stats();
+        // The last sampled token is only evaluated when another one follows it.
+        let mut seen = ids.clone();
+        seen.extend(&tokens);
+        seen.truncate(state.tokens());
+        self.cache = Some((seen, state));
         Ok(Generation {
             text,
             prompt_tokens: ids.len(),
+            cached_prompt_tokens: cached,
             completion_tokens: tokens.len(),
             prompt_token_ids: ids,
             completion_token_ids: tokens,
@@ -460,6 +493,55 @@ mod tests {
         assert_eq!(stop_boundary("text🐈st", &stops), (4, false));
         assert_eq!(stop_boundary("🐈stop afterwards", &stops), (0, true));
         assert_eq!(stop_boundary("keep END ignore", &stops), (5, true));
+    }
+
+    #[test]
+    #[ignore = "requires the pinned TinyStories Q4_0 GGUF"]
+    fn reused_prompt_prefix_generates_the_same_tokens() {
+        let path = std::env::var_os("ORYNDRAL_TEST_GGUF").expect("pinned GGUF path");
+        let load = || {
+            let file = ModelFile::open(Path::new(&path)).unwrap();
+            let memory = file.memory(128, 0).unwrap();
+            let plan = crate::planner::plan(&memory, Default::default()).unwrap();
+            Engine::load(file, plan, 128, 0, Default::default(), None, None).unwrap()
+        };
+        let greedy = Sampling {
+            temperature: 0.,
+            max_tokens: 12,
+            ..Sampling::default()
+        };
+        let run = |engine: &mut Engine, prompt: &str| {
+            let ids = engine.tokenize(prompt).unwrap();
+            engine.generate(ids, &greedy, |_| true).unwrap()
+        };
+        let (mut warm, mut cold) = (load(), load());
+        let first = run(&mut warm, "Once upon a time");
+        assert_eq!(first.cached_prompt_tokens, 0);
+
+        // The same prompt again reuses all but its last token.
+        let again = run(&mut warm, "Once upon a time");
+        assert_eq!(again.cached_prompt_tokens, first.prompt_tokens - 1);
+        assert_eq!(again.completion_token_ids, first.completion_token_ids);
+
+        // This prompt follows the previous reply for a few tokens and then departs from it,
+        // so the session is cut back in the middle of what the model generated.
+        let longer = "Once upon a time, there was a little dog who";
+        let reused = run(&mut warm, longer);
+        assert!(reused.cached_prompt_tokens > first.prompt_tokens);
+        assert!(reused.cached_prompt_tokens < reused.prompt_tokens);
+        assert_eq!(
+            reused.completion_token_ids,
+            run(&mut cold, longer).completion_token_ids
+        );
+
+        // An unrelated prompt shares at most the BOS token.
+        let other = "The sun was bright and";
+        let fresh = run(&mut warm, other);
+        assert!(fresh.cached_prompt_tokens <= 1);
+        assert_eq!(
+            fresh.completion_token_ids,
+            run(&mut cold, other).completion_token_ids
+        );
     }
 
     #[test]

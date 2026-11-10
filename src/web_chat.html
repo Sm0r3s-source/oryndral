@@ -10,17 +10,18 @@
   <style>
     :root {
       color-scheme: light dark;
-      --page: #faf9fd; --panel: #fff; --soft: #eeedf9; --line: #dcdced;
+      --page: #faf9fd; --panel: #fff; --soft: #eeedf9; --line: #dcdced; --code: #f4f3fb;
       --text: #232538; --prose: #2c2938; --muted: #5c6075;
       --accent: #4657aa; --accent-text: #fff; --good: #34694f; --bad: #a22b45;
       --shadow: 0 .25rem 1.25rem #31275b0d;
       --measure: 46rem;
       --serif: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+      --mono: ui-monospace, "Cascadia Code", Consolas, "SF Mono", Menlo, monospace;
       font: 16px/1.55 system-ui, "Segoe UI", sans-serif;
     }
     @media (prefers-color-scheme: dark) {
       :root {
-        --page: #171722; --panel: #202130; --soft: #292b43; --line: #3a3d55;
+        --page: #171722; --panel: #202130; --soft: #292b43; --line: #3a3d55; --code: #1c1d2b;
         --text: #f0eff7; --prose: #eeeaf6; --muted: #b6b8cc;
         --accent: #bbc5ff; --accent-text: #202b62; --good: #9cd5b5; --bad: #ffa8ba;
         --shadow: 0 .25rem 1.25rem #07061533;
@@ -29,81 +30,130 @@
     * { box-sizing: border-box; }
     [hidden] { display: none !important; }
     body { display: flex; flex-direction: column; height: 100dvh; min-height: 25rem; margin: 0; background: var(--page); color: var(--text); }
-    h1, h2, h3, h4, p { margin: 0; }
+    h1, h2, h3, h4, h5, h6, p { margin: 0; }
     .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
-    .subtle { color: var(--muted); font-size: .82rem; }
-    header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .9rem clamp(.8rem, 3vw, 2.3rem); }
-    .identity, .utilities { display: flex; align-items: center; gap: .65rem; min-width: 0; }
-    .identity h1 { font-size: 1.1rem; font-weight: 660; letter-spacing: -.025em; line-height: 1.2; }
+    .subtle { color: var(--muted); font-size: .8rem; }
+    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+    /* Controls */
+    input, select, textarea, button { font: inherit; color: var(--text); }
+    label { display: block; margin-bottom: .25rem; font-size: .86rem; font-weight: 600; }
+    label.check { display: flex; align-items: baseline; gap: .4rem; margin: 0; }
+    textarea, input:not([type="checkbox"]) { width: 100%; padding: .45rem .65rem; border: 1px solid var(--line); border-radius: .65rem; background: var(--panel); }
+    textarea { display: block; resize: vertical; }
+    button { cursor: pointer; padding: .43rem .8rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: .84rem; }
+    button:not(:disabled):hover { background: var(--soft); }
+    button:disabled { cursor: default; opacity: .5; }
+    button svg { display: block; width: 1rem; height: 1rem; }
+    .ghost { padding: .22rem .55rem; border: 0; border-radius: .5rem; background: none; color: var(--muted); font-size: .78rem; }
+    .ghost:not(:disabled):hover { color: var(--text); }
+    .round { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; padding: 0; }
+    .primary { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
+    .primary:not(:disabled):hover { background: var(--accent); filter: brightness(.92); }
+
+    /* Header */
+    header { position: relative; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .8rem clamp(.8rem, 3vw, 2rem); }
+    .identity, .utilities { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+    .identity h1 { font-size: 1.05rem; font-weight: 660; letter-spacing: -.02em; line-height: 1.2; }
     .symbol-library { position: absolute; }
-    .mark { display: block; flex: none; width: 2.1rem; aspect-ratio: 1; }
-    #status { font-size: .74rem; color: var(--muted); overflow-wrap: anywhere; }
+    .mark { display: block; flex: none; width: 2rem; aspect-ratio: 1; }
+    #status { color: var(--muted); font-size: .74rem; overflow-wrap: anywhere; }
     #status::before { display: inline-block; width: .38rem; height: .38rem; margin-right: .35rem; border-radius: 50%; background: currentColor; content: ""; vertical-align: .08em; }
     #status[data-state="ready"] { color: var(--good); }
     #status[data-state="error"] { color: var(--bad); }
-    .utility { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid var(--line); border-radius: 999px; padding: .45rem .8rem; background: var(--panel); font-size: .82rem; white-space: nowrap; }
-    .utility svg { width: 1rem; height: 1rem; }
-    .utility:not(:disabled):hover, .settings[open] > summary { background: var(--soft); }
+    .utility { display: inline-flex; align-items: center; gap: .4rem; white-space: nowrap; }
     .settings { position: relative; }
-    .settings > summary { list-style: none; }
+    .settings > summary { cursor: pointer; padding: .43rem .8rem; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); font-size: .84rem; list-style: none; }
     .settings > summary::-webkit-details-marker { display: none; }
-    .settings-card { position: absolute; top: calc(100% + .5rem); right: 0; width: min(20rem, calc(100vw - 1.6rem)); max-height: calc(100dvh - 5.5rem); overflow: auto; padding: 1rem; border: 1px solid var(--line); border-radius: 1.1rem; background: var(--panel); box-shadow: var(--shadow); }
+    .settings > summary:hover, .settings[open] > summary { background: var(--soft); }
+    .settings > summary svg { width: 1rem; height: 1rem; }
+    .settings-card { position: absolute; top: calc(100% + .5rem); right: 0; width: min(21rem, calc(100vw - 1.6rem)); max-height: calc(100dvh - 5.5rem); overflow: auto; padding: 1rem; border: 1px solid var(--line); border-radius: 1.1rem; background: var(--panel); box-shadow: var(--shadow); }
     .settings-card h2 { font-size: .95rem; }
-    main, .conversation { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-    #transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 1.1rem max(1rem, calc((100% - var(--measure)) / 2)) 1.8rem; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; }
+    .fields { display: grid; gap: .75rem; margin-top: .75rem; }
+    .numbers { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; }
+
+    /* Transcript */
+    main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    #transcript { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: auto; padding: 1rem max(1rem, calc((100% - var(--measure)) / 2)) 1.6rem; overscroll-behavior: contain; scrollbar-gutter: stable both-edges; }
     #transcript:focus-visible { outline-offset: -4px; }
     .empty { margin: auto 0; padding: 1rem 0 clamp(1rem, 4vh, 3rem); text-align: center; }
     .empty .mark { width: 2.75rem; margin: 0 auto .9rem; }
-    .empty h2 { font: 400 clamp(2.35rem, 6vw, 4rem)/1.12 var(--serif); letter-spacing: -.045em; color: var(--prose); }
-    .empty p { margin: .8rem auto 0; color: var(--muted); font-size: .95rem; }
+    .empty h2 { color: var(--prose); font: 400 clamp(2.2rem, 6vw, 3.6rem)/1.12 var(--serif); letter-spacing: -.04em; }
+    .empty p { margin: .8rem auto 0; color: var(--muted); font-size: .95rem; overflow-wrap: anywhere; }
     article { flex: none; min-width: 0; }
-    article + article { margin-top: clamp(1.4rem, 4vh, 2.4rem); }
-    article.user { align-self: flex-end; max-width: min(85%, 37rem); padding: .75rem 1.05rem; border-radius: 1.25rem 1.25rem .4rem 1.25rem; background: var(--soft); }
-    article.assistant { padding-inline: .2rem; }
-    article h3, .answer-title { margin: 0 0 .35rem; font-size: .79rem; font-weight: 650; color: var(--muted); }
-    .message-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-    .assistant > .message-text { color: var(--prose); font: 400 clamp(1.09rem, 2.1vw, 1.27rem)/1.68 var(--serif); }
-    .reasoning { margin: .65rem 0 .95rem; padding: .55rem .8rem; border: 1px solid var(--line); border-radius: .85rem; background: var(--soft); }
-    .reasoning summary { font-size: .88rem; font-weight: 650; }
-    .reasoning[open] summary { margin-bottom: .35rem; }
-    .reasoning .message-text { color: var(--muted); font-size: .88rem; }
-    .reasoning[hidden] + .answer-title { display: none; }
-    .composer { flex: none; width: min(calc(100% - 2rem), var(--measure)); margin: 0 auto .8rem; }
-    .compose { padding: .65rem .7rem .55rem; border: 1px solid var(--line); border-radius: 1.6rem; background: var(--panel); box-shadow: var(--shadow); }
+    article + article { margin-top: 1.6rem; }
+    .user { align-self: flex-end; max-width: min(85%, 37rem); padding: .65rem 1rem; border-radius: 1.25rem 1.25rem .4rem 1.25rem; background: var(--soft); white-space: pre-wrap; overflow-wrap: anywhere; }
+    .dots { display: inline-flex; gap: .3rem; padding: .6rem 0; }
+    .dots i { width: .42rem; height: .42rem; border-radius: 50%; background: var(--muted); animation: pulse 1.2s ease-in-out infinite; }
+    .dots i:nth-child(2) { animation-delay: .15s; }
+    .dots i:nth-child(3) { animation-delay: .3s; }
+    @keyframes pulse { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
+    .meta { display: flex; flex-wrap: wrap; align-items: center; gap: .1rem .3rem; margin: .45rem 0 0 -.55rem; }
+    .meta .subtle { margin-left: .55rem; font-size: .76rem; }
+
+    /* Reasoning */
+    .reasoning { margin-bottom: .75rem; }
+    .reasoning summary { display: inline-flex; align-items: center; gap: .45rem; cursor: pointer; padding: .26rem .75rem; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: .8rem; font-weight: 600; list-style: none; }
+    .reasoning summary::-webkit-details-marker { display: none; }
+    .reasoning summary::after { width: .38rem; height: .38rem; border: solid currentColor; border-width: 0 1.5px 1.5px 0; content: ""; transform: translateY(-.05rem) rotate(-45deg); transition: transform .15s; }
+    .reasoning[open] summary::after { transform: translateY(-.1rem) rotate(45deg); }
+    .reasoning.live summary { color: var(--accent); animation: pulse 1.6s ease-in-out infinite; }
+    .reasoning-text { margin: .6rem 0 0 .25rem; padding-left: .85rem; border-left: 2px solid var(--line); color: var(--muted); font-size: .88rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+    /* Rendered answers */
+    .md { color: var(--prose); font: 400 clamp(1.06rem, 2vw, 1.2rem)/1.65 var(--serif); overflow-wrap: anywhere; }
+    .md > * { margin: 0 0 .85em; }
+    .md > :last-child { margin-bottom: 0; }
+    .md p { white-space: pre-line; }
+    .md h3, .md h4, .md h5, .md h6 { margin-top: 1.3em; margin-bottom: .45em; color: var(--text); font-family: system-ui, "Segoe UI", sans-serif; font-weight: 650; line-height: 1.3; }
+    .md > :first-child { margin-top: 0; }
+    .md h3 { font-size: 1.2em; }
+    .md h4 { font-size: 1.08em; }
+    .md h5, .md h6 { font-size: 1em; }
+    .md ul, .md ol { padding-left: 1.4em; }
+    .md li { margin: .25em 0; }
+    .md li > * { margin: 0; }
+    .md li > * + * { margin-top: .4em; }
+    .md blockquote { padding-left: .9em; border-left: 3px solid var(--line); color: var(--muted); }
+    .md blockquote > * { margin: 0; }
+    .md blockquote > * + * { margin-top: .6em; }
+    .md hr { border: 0; border-top: 1px solid var(--line); }
+    .md a { color: var(--accent); text-underline-offset: .15em; }
+    .md code { padding: .12em .35em; border-radius: .35em; background: var(--soft); font: .84em/1.5 var(--mono); }
+    .code { overflow: hidden; border: 1px solid var(--line); border-radius: .8rem; background: var(--code); }
+    .code-head { display: flex; align-items: center; justify-content: space-between; padding: .25rem .35rem .25rem .85rem; border-bottom: 1px solid var(--line); color: var(--muted); font: .74rem/1.4 system-ui, "Segoe UI", sans-serif; }
+    .code pre { margin: 0; padding: .8rem .9rem; overflow-x: auto; color: var(--text); font: .86rem/1.55 var(--mono); }
+    .code pre code { padding: 0; background: none; font: inherit; }
+    .table-wrap { overflow-x: auto; }
+    .md table { border-collapse: collapse; font: .9rem/1.45 system-ui, "Segoe UI", sans-serif; }
+    .md th, .md td { padding: .4rem .75rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .md th { color: var(--muted); font-weight: 650; }
+
+    /* Composer */
+    .composer { flex: none; width: min(calc(100% - 2rem), var(--measure)); margin: 0 auto .7rem; }
+    .compose { padding: .55rem .6rem .5rem; border: 1px solid var(--line); border-radius: 1.5rem; background: var(--panel); box-shadow: var(--shadow); }
     .compose:focus-within { border-color: var(--accent); }
-    #prompt { min-height: 3rem; max-height: min(11rem, 28dvh); padding: .35rem .55rem; border: 0; background: transparent; }
+    #prompt { max-height: min(12rem, 32dvh); padding: .4rem .55rem; border: 0; background: transparent; resize: none; field-sizing: content; }
     #prompt:focus-visible { outline: none; }
-    #shortcut { display: block; margin-top: .35rem; text-align: center; font-size: .72rem; }
-    .actions { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: .6rem; margin-top: .3rem; }
-    .model-picker { min-width: 0; max-width: 18rem; }
-    #model { padding: .4rem .65rem; border-radius: 999px; background: var(--soft); font-size: .84rem; text-overflow: ellipsis; }
-    .send-actions { display: flex; align-items: center; gap: .35rem; }
-    summary { cursor: pointer; }
-    .fields { display: grid; gap: .7rem; margin-top: .75rem; }
-    .numbers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
-    label { display: block; font-size: .88rem; font-weight: 600; margin-bottom: .25rem; }
-    label.check { display: flex; align-items: baseline; gap: .4rem; margin: 0; }
-    textarea, input:not([type="checkbox"]), select { width: 100%; }
-    input, select, textarea, button { font: inherit; color: var(--text); }
-    input:not([type="checkbox"]), select, textarea { background: var(--panel); border: 1px solid var(--line); border-radius: .65rem; padding: .45rem .65rem; }
-    textarea { display: block; resize: vertical; }
-    button { cursor: pointer; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); padding: .43rem .75rem; font-size: .86rem; }
-    button:not(:disabled):hover { background: var(--soft); }
-    button.primary { min-width: 4.4rem; border-color: var(--accent); background: var(--accent); color: var(--accent-text); font-weight: 650; }
-    button.primary:not(:disabled):hover { filter: brightness(.93); background: var(--accent); }
-    button:disabled, select:disabled { cursor: default; opacity: .55; }
-    :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-    #error { margin: .35rem .5rem .45rem; color: var(--bad); font-size: .88rem; overflow-wrap: anywhere; }
+    #error { margin: .2rem .55rem .35rem; color: var(--bad); font-size: .86rem; overflow-wrap: anywhere; }
+    .actions { display: flex; align-items: center; justify-content: space-between; gap: .6rem; margin-top: .2rem; }
+    .chips { display: flex; align-items: center; gap: .4rem; min-width: 0; }
+    #model { min-width: 0; overflow: hidden; padding: .3rem .7rem; border-radius: 999px; background: var(--soft); color: var(--muted); font-size: .8rem; text-overflow: ellipsis; white-space: nowrap; }
+    #think { flex: none; padding: .24rem .7rem; color: var(--muted); font-size: .8rem; }
+    #think[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+    #shortcut { display: block; margin-top: .4rem; text-align: center; font-size: .72rem; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .dots i, .reasoning.live summary { animation: none; }
+      .reasoning summary::after { transition: none; }
+    }
     @media (max-width: 29rem) {
       header { gap: .4rem; }
-      .utilities { gap: .35rem; }
-      .utility { padding-inline: .6rem; }
-      .utility svg { display: none; }
-      .identity { gap: .4rem; }
+      .utility svg, .settings > summary svg { display: none; }
       .identity .mark { width: 1.55rem; }
       #transcript { padding-inline: .75rem; scrollbar-gutter: auto; }
       .composer { width: calc(100% - 1.4rem); }
-      .compose { border-radius: 1.25rem; }
+      .numbers { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -136,7 +186,7 @@
           Settings
         </summary>
         <div class="settings-card">
-          <h2>Session settings</h2>
+          <h2>Chat settings</h2>
           <div class="fields">
             <div>
               <label for="system">System message</label>
@@ -145,267 +195,532 @@
             <div class="numbers">
               <div><label for="temperature">Temperature</label><input id="temperature" form="compose" type="number" min="0" max="2" step="any" value="0.8" required></div>
               <div><label for="top-p">Top-p</label><input id="top-p" form="compose" type="number" min="0.000001" max="1" step="any" value="0.95" required></div>
+              <div><label for="limit">Max tokens</label><input id="limit" form="compose" type="number" min="1" max="131072" step="1" value="1024" required></div>
             </div>
-            <div><label for="limit">Max output tokens</label><input id="limit" form="compose" type="number" min="1" max="131072" step="1" value="1024" required></div>
-            <label class="check"><input id="single" type="checkbox"> Send only the latest prompt</label>
-            <p class="subtle">Use a single prompt for base models without chat templates.</p>
-            <button type="button" id="connect">Refresh models</button>
+            <div>
+              <label class="check"><input id="single" type="checkbox"> Send only the latest message</label>
+              <p class="subtle">For base models that have no chat template.</p>
+            </div>
+            <button type="button" id="connect">Reconnect to server</button>
           </div>
         </div>
       </details>
     </div>
   </header>
   <main>
-    <section class="conversation" aria-labelledby="conversation-title">
-      <h2 id="conversation-title" class="sr-only">Conversation</h2>
-      <div id="transcript" role="region" aria-label="Messages" tabindex="0">
-        <div id="empty" class="empty">
-          <svg class="mark" aria-hidden="true"><use href="#oryndral-mark"/></svg>
-          <h2>What’s on your mind?</h2>
-          <p>Start a conversation with your local model.</p>
-        </div>
+    <h2 class="sr-only">Conversation</h2>
+    <div id="transcript" role="region" aria-label="Messages" tabindex="0">
+      <div id="empty" class="empty">
+        <svg class="mark" aria-hidden="true"><use href="#oryndral-mark"/></svg>
+        <h2>What’s on your mind?</h2>
+        <p id="greeting">Start a conversation with your local model.</p>
       </div>
-      <div class="composer">
-        <form id="compose" class="compose">
-          <label for="prompt" class="sr-only">Message</label>
-          <textarea id="prompt" rows="2" required placeholder="Ask your model…" aria-describedby="shortcut"></textarea>
-          <p id="error" role="alert" hidden></p>
-          <div class="actions">
-            <div class="model-picker">
-              <label for="model" class="sr-only">Model</label>
-              <select id="model" disabled><option value="">Looking for models…</option></select>
-            </div>
-            <div class="send-actions">
-              <button type="button" id="cancel" hidden>Stop</button>
-              <button type="submit" class="primary" id="send" disabled>Send</button>
-            </div>
+    </div>
+    <div class="composer">
+      <form id="compose" class="compose">
+        <label for="prompt" class="sr-only">Message</label>
+        <textarea id="prompt" rows="1" required placeholder="Ask your model…" aria-describedby="shortcut"></textarea>
+        <p id="error" role="alert" hidden></p>
+        <div class="actions">
+          <div class="chips">
+            <span id="model" title="Loaded model">Looking for a model…</span>
+            <button type="button" id="think" aria-pressed="true" title="Reason before answering. Turn off for faster replies." hidden>Thinking on</button>
           </div>
-        </form>
-        <small id="shortcut" class="subtle">Ctrl or ⌘ + Enter to send</small>
-      </div>
-    </section>
+          <button type="button" class="round" id="cancel" aria-label="Stop generating" title="Stop" hidden>
+            <svg viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><rect x="5.5" y="5.5" width="9" height="9" rx="1.5"/></svg>
+          </button>
+          <button type="submit" class="round primary" id="send" aria-label="Send message" title="Send" disabled>
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 16V4M4.5 9.5 10 4l5.5 5.5"/></svg>
+          </button>
+        </div>
+      </form>
+      <small id="shortcut" class="subtle">Enter to send · Shift + Enter for a new line</small>
+    </div>
   </main>
   <script>
     "use strict";
-    const byId = (id) => document.getElementById(id);
-    const form = byId("compose"), prompt = byId("prompt"), transcript = byId("transcript");
-    const model = byId("model"), send = byId("send"), clear = byId("clear"), cancel = byId("cancel");
-    const status = byId("status"), error = byId("error"), empty = byId("empty"), connect = byId("connect");
-    const history = [];
-    let active = null;
-    let connecting = false;
+    {
+      const byId = (id) => document.getElementById(id);
+      const form = byId("compose"), prompt = byId("prompt"), transcript = byId("transcript");
+      const send = byId("send"), cancel = byId("cancel"), clear = byId("clear"), connect = byId("connect");
+      const status = byId("status"), error = byId("error"), empty = byId("empty"), settings = byId("settings");
+      const think = byId("think");
+      const SAVED = ["system", "temperature", "top-p", "limit", "single"];
+      const history = [];
+      let model = "";
+      let active = null;
+      let latest = null;
+      let connecting = false;
 
-    function setStatus(message, state) {
-      status.textContent = message;
-      status.dataset.state = state;
-    }
-
-    function showError(message = "") {
-      error.textContent = message;
-      error.hidden = !message;
-    }
-
-    function controls() {
-      const busy = active !== null;
-      const ready = Boolean(model.value) && !connecting;
-      send.disabled = busy || !ready || !prompt.value.trim();
-      clear.disabled = busy || transcript.childElementCount < 2;
-      connect.disabled = busy || connecting;
-      model.disabled = busy || !ready;
-      cancel.hidden = !busy;
-      cancel.disabled = Boolean(active?.signal.aborted);
-    }
-
-    async function responseError(response) {
-      const data = await response.json().catch(() => null);
-      return data?.error?.message || `The server returned HTTP ${response.status}.`;
-    }
-
-    async function discover() {
-      connecting = true;
-      controls();
-      showError();
-      setStatus("Connecting…", "busy");
-      const previous = model.value;
-      try {
-        const response = await fetch("/v1/models");
-        if (!response.ok) throw new Error(await responseError(response));
-        const { data } = await response.json();
-        const ids = Array.isArray(data) ? data.map((entry) => entry.id).filter((id) => typeof id === "string" && id) : [];
-        if (!ids.length) throw new Error("The server did not list a model.");
-        model.replaceChildren(...ids.map((id) => new Option(id, id)));
-        if (ids.includes(previous)) model.value = previous;
-        setStatus("Ready", "ready");
-      } catch (problem) {
-        model.replaceChildren(new Option("No model available", ""));
-        setStatus("Unavailable", "error");
-        showError(`${problem.message} Check the server and refresh models.`);
-      } finally {
-        connecting = false;
-        controls();
-      }
-    }
-
-    function addMessage(role, text = "") {
-      empty.hidden = true;
-      const article = document.createElement("article");
-      const label = document.createElement("h3");
-      label.textContent = role === "user" ? "You" : "Assistant";
-      article.className = role;
-      article.append(label);
-      const details = document.createElement("details");
-      const reasoning = document.createTextNode("");
-      const pending = document.createElement("p");
-      if (role === "assistant") {
-        const summary = document.createElement("summary");
-        summary.textContent = "Reasoning details";
-        const reasoningText = document.createElement("p");
-        reasoningText.className = "message-text";
-        reasoningText.append(reasoning);
-        details.className = "reasoning";
-        details.hidden = true;
-        details.append(summary, reasoningText);
-        const title = document.createElement("h4");
-        title.textContent = "Answer";
-        title.className = "answer-title";
-        pending.textContent = "Waiting for an answer…";
-        pending.className = "subtle";
-        article.append(details, title, pending);
-      }
-      const body = document.createElement("p");
-      const content = document.createTextNode(text);
-      body.className = "message-text";
-      body.append(content);
-      article.append(body);
-      transcript.append(article);
-      return { article, label, details, content, reasoning, pending };
-    }
-
-    function scrollToLatest() {
-      transcript.scrollTop = transcript.scrollHeight;
-    }
-
-    async function readEvents(response, onDelta) {
-      if (!response.body) throw new Error("The browser could not read the response stream.");
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      try {
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) throw new Error("The server closed the response before completion.");
-          buffer += decoder.decode(value, { stream: true });
-          const events = buffer.split(/\r?\n\r?\n/);
-          buffer = events.pop();
-          for (const event of events) {
-            const data = event.split(/\r?\n/)
-              .filter((line) => line.startsWith("data:"))
-              .map((line) => line.slice(5).replace(/^ /, "")).join("\n");
-            if (!data) continue;
-            if (data === "[DONE]") return;
-            const frame = JSON.parse(data);
-            if (frame.error) throw new Error(frame.error.message || "Generation failed.");
-            if (frame.choices?.[0]?.delta) onDelta(frame.choices[0].delta);
-          }
-        }
-      } finally {
-        await reader.cancel().catch(() => {});
-        reader.releaseLock();
-      }
-    }
-
-    form.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      if (send.disabled) return;
-      showError();
-      const user = { role: "user", content: prompt.value };
-      const messages = [...history, user];
-      const system = byId("system").value.trim();
-      if (system) messages.unshift({ role: "system", content: system });
-      const single = byId("single").checked;
-      const request = {
-        model: model.value,
-        messages: single ? [user] : messages,
-        temperature: byId("temperature").valueAsNumber,
-        top_p: byId("top-p").valueAsNumber,
-        max_tokens: byId("limit").valueAsNumber,
-        stream: true,
+      const el = (tag, className, text) => {
+        const node = document.createElement(tag);
+        if (className) node.className = className;
+        if (text !== undefined) node.textContent = text;
+        return node;
       };
-      const userView = addMessage("user", user.content);
-      const answer = addMessage("assistant");
-      const controller = new AbortController();
-      active = controller;
-      prompt.value = "";
-      controls();
-      scrollToLatest();
-      setStatus("Generating…", "busy");
-      try {
-        const response = await fetch("/v1/chat/completions", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request), signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(await responseError(response));
-        await readEvents(response, (delta) => {
-          const follow = transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
-          if (typeof delta.reasoning_content === "string" && delta.reasoning_content) {
-            answer.details.hidden = false;
-            answer.reasoning.appendData(delta.reasoning_content);
-          }
-          if (typeof delta.content === "string" && delta.content) {
-            answer.pending.hidden = true;
-            answer.content.appendData(delta.content);
-          }
-          if (follow) scrollToLatest();
-        });
-        setStatus("Ready", "ready");
-      } catch (problem) {
-        if (controller.signal.aborted) {
-          answer.label.textContent = "Assistant · stopped";
-          setStatus("Generation stopped", "ready");
-        } else {
-          answer.label.textContent = "Assistant · interrupted";
-          showError(problem.message || "Generation failed.");
-          setStatus("Generation interrupted", "error");
-        }
-      } finally {
-        if (answer.content.length) {
-          history.push(user, { role: "assistant", content: answer.content.data });
-        } else if (answer.reasoning.length) {
-          answer.pending.textContent = "No answer was received.";
-        } else {
-          answer.article.remove();
-          userView.article.remove();
-          if (!prompt.value) prompt.value = user.content;
-          empty.hidden = transcript.childElementCount > 1;
-        }
-        active = null;
-        controls();
-        if (document.activeElement === cancel || document.activeElement === document.body) prompt.focus();
-      }
-    });
 
-    connect.addEventListener("click", discover);
-    const settings = byId("settings");
-    settings.addEventListener("invalid", () => { settings.open = true; }, true);
-    cancel.addEventListener("click", () => { active?.abort(); controls(); });
-    clear.addEventListener("click", () => {
-      history.length = 0;
-      transcript.replaceChildren(empty);
-      empty.hidden = false;
-      prompt.value = "";
-      showError();
-      if (model.value) setStatus("Ready", "ready");
-      controls();
-      prompt.focus();
-    });
-    prompt.addEventListener("input", controls);
-    prompt.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.isComposing && (event.ctrlKey || event.metaKey)) {
-        event.preventDefault();
-        if (!send.disabled) form.requestSubmit();
+      /* Markdown. Everything is built as DOM nodes, so model output is never parsed as HTML. */
+      const INLINE = new RegExp([
+        /\\(?<esc>[\\`*_{}[\]()#+\-.!~|>])/,
+        /(?<tick>`+)(?<code>[\s\S]+?)\k<tick>(?!`)/,
+        /\*\*(?=\S)(?<bold>[\s\S]+?)(?<=\S)\*\*/,
+        /(?<![\w_])__(?=\S)(?<bold2>[\s\S]+?)(?<=\S)__(?![\w_])/,
+        /(?<![\w*])\*(?=[^\s*])(?<em>[^*]+?)(?<=\S)\*(?![\w*])/,
+        /(?<![\w_])_(?=[^\s_])(?<em2>[^_]+?)(?<=\S)_(?![\w_])/,
+        /~~(?=\S)(?<del>[^~]+?)~~/,
+        /\[(?<label>[^\]\n]+)\]\((?<href>https?:\/\/[^\s)]+)\)/,
+        /(?<url>https?:\/\/[^\s<>()[\]]*[^\s<>()[\].,;:!?'"*_`])/,
+      ].map((part) => part.source).join("|"), "g");
+      const FENCE = /^ {0,3}(`{3,}|~{3,}) *([\w+#.-]*)/;
+      const HEADING = /^ {0,3}(#{1,6}) +(.*?)(?: +#+)? *$/;
+      const RULE = /^ {0,3}([-*_])(?: *\1){2,} *$/;
+      const QUOTE = /^ {0,3}> ?/;
+      const ITEM = /^( *)([-*+]|\d{1,9}[.)]) +(.*)$/;
+      const DIVIDER = /^ *\|? *:?-+:? *(?:\| *:?-+:? *)*\|? *$/;
+
+      function inline(text, parent) {
+        let at = 0;
+        for (const match of text.matchAll(INLINE)) {
+          const part = match.groups;
+          parent.append(text.slice(at, match.index));
+          at = match.index + match[0].length;
+          if (part.esc !== undefined) parent.append(part.esc);
+          else if (part.code !== undefined) parent.append(el("code", "", part.code.trim() || part.code));
+          else if (part.bold ?? part.bold2) inline(part.bold ?? part.bold2, parent.appendChild(el("strong")));
+          else if (part.em ?? part.em2) inline(part.em ?? part.em2, parent.appendChild(el("em")));
+          else if (part.del) inline(part.del, parent.appendChild(el("del")));
+          else {
+            const link = parent.appendChild(el("a"));
+            link.href = part.href ?? part.url;
+            link.target = "_blank";
+            link.rel = "noopener noreferrer";
+            if (part.label) inline(part.label, link);
+            else link.textContent = part.url;
+          }
+        }
+        parent.append(text.slice(at));
       }
-    });
-    discover();
+
+      const startsBlock = (line) => [FENCE, HEADING, RULE, QUOTE, ITEM].some((kind) => kind.test(line));
+      const indentOf = (line) => line.length - line.trimStart().length;
+      const cells = (row) => row.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map((cell) => cell.trim());
+
+      function blocks(lines, parent) {
+        let i = 0;
+        while (i < lines.length) {
+          const line = lines[i];
+          let found;
+          if (!line.trim()) {
+            i++;
+          } else if ((found = FENCE.exec(line))) {
+            const [, fence, language] = found;
+            const end = new RegExp(`^ {0,3}${fence[0]}{${fence.length},} *$`);
+            const body = [];
+            for (i++; i < lines.length && !end.test(lines[i]); i++) body.push(lines[i]);
+            i++;
+            const box = parent.appendChild(el("div", "code"));
+            const head = box.appendChild(el("div", "code-head"));
+            head.append(el("span", "", language || "code"), copyButton());
+            box.appendChild(el("pre")).append(el("code", "", body.join("\n")));
+          } else if ((found = HEADING.exec(line))) {
+            inline(found[2], parent.appendChild(el(`h${Math.min(found[1].length + 2, 6)}`)));
+            i++;
+          } else if (RULE.test(line)) {
+            parent.append(el("hr"));
+            i++;
+          } else if (QUOTE.test(line)) {
+            const quoted = [];
+            for (; i < lines.length && QUOTE.test(lines[i]); i++) quoted.push(lines[i].replace(QUOTE, ""));
+            blocks(quoted, parent.appendChild(el("blockquote")));
+          } else if ((found = ITEM.exec(line))) {
+            i = list(lines, i, found, parent);
+          } else if (line.includes("|") && /\|/.test(lines[i + 1] ?? "") && DIVIDER.test(lines[i + 1])) {
+            i = table(lines, i, parent);
+          } else {
+            const text = [line];
+            for (i++; i < lines.length && lines[i].trim() && !startsBlock(lines[i]); i++) text.push(lines[i]);
+            inline(text.join("\n").trim(), parent.appendChild(el("p")));
+          }
+        }
+      }
+
+      function list(lines, i, first, parent) {
+        const indent = first[1].length;
+        const ordered = /\d/.test(first[2]);
+        const node = parent.appendChild(el(ordered ? "ol" : "ul"));
+        if (ordered) node.start = parseInt(first[2], 10);
+        for (;;) {
+          // A blank line between two items keeps them in the same list.
+          let next = i;
+          while (next < lines.length && !lines[next].trim()) next++;
+          const item = next < lines.length && ITEM.exec(lines[next]);
+          if (!item || item[1].length !== indent || /\d/.test(item[2]) !== ordered) return i;
+          const column = indent + item[2].length + 1;
+          const body = [item[3]];
+          for (i = next + 1; i < lines.length; i++) {
+            const line = lines[i];
+            if (!line.trim()) {
+              let after = i + 1;
+              while (after < lines.length && !lines[after].trim()) after++;
+              if (after === lines.length || indentOf(lines[after]) <= indent) break;
+              body.push("");
+            } else if (indentOf(line) <= indent && startsBlock(line)) {
+              break;
+            } else {
+              body.push(line.slice(Math.min(indentOf(line), column)));
+            }
+          }
+          blocks(body, node.appendChild(el("li")));
+        }
+      }
+
+      function table(lines, i, parent) {
+        const aligns = cells(lines[i + 1]).map((cell) =>
+          cell.endsWith(":") ? (cell.startsWith(":") ? "center" : "right") : "");
+        const node = parent.appendChild(el("div", "table-wrap")).appendChild(el("table"));
+        const fill = (row, tag, source) => cells(source).forEach((text, column) => {
+          const cell = row.appendChild(el(tag));
+          cell.style.textAlign = aligns[column] || "";
+          inline(text, cell);
+        });
+        fill(node.createTHead().insertRow(), "th", lines[i]);
+        const body = node.createTBody();
+        for (i += 2; i < lines.length && lines[i].trim() && lines[i].includes("|"); i++) {
+          fill(body.insertRow(), "td", lines[i]);
+        }
+        return i;
+      }
+
+      function copyButton() {
+        const button = el("button", "ghost", "Copy");
+        button.type = "button";
+        button.dataset.act = "copy";
+        return button;
+      }
+
+      /* Page state */
+      function setStatus(message, state) {
+        status.textContent = message;
+        status.dataset.state = state;
+      }
+
+      function showError(message = "") {
+        error.textContent = message;
+        error.hidden = !message;
+      }
+
+      function controls() {
+        const busy = active !== null;
+        send.hidden = busy;
+        cancel.hidden = !busy;
+        send.disabled = !model || connecting || !prompt.value.trim();
+        clear.disabled = busy || !transcript.querySelector("article");
+        connect.disabled = think.disabled = busy || connecting;
+      }
+
+      const thinking = () => think.getAttribute("aria-pressed") === "true";
+      function setThinking(on) {
+        think.setAttribute("aria-pressed", String(on));
+        think.textContent = on ? "Thinking on" : "Thinking off";
+      }
+
+      // Browsers with `field-sizing` grow the message box themselves.
+      function fitPrompt() {
+        if (CSS.supports("field-sizing", "content")) return;
+        prompt.style.height = "auto";
+        prompt.style.height = `${prompt.scrollHeight}px`;
+      }
+
+      const nearEnd = () => transcript.scrollHeight - transcript.scrollTop - transcript.clientHeight < 80;
+      const scrollToEnd = () => { transcript.scrollTop = transcript.scrollHeight; };
+
+      async function responseError(response) {
+        const data = await response.json().catch(() => null);
+        return data?.error?.message || `The server returned HTTP ${response.status}.`;
+      }
+
+      async function discover() {
+        connecting = true;
+        controls();
+        showError();
+        setStatus("Connecting…", "busy");
+        try {
+          const response = await fetch("/v1/models");
+          if (!response.ok) throw new Error(await responseError(response));
+          const { data } = await response.json();
+          model = Array.isArray(data) && typeof data[0]?.id === "string" ? data[0].id : "";
+          if (!model) throw new Error("The server did not list a model.");
+          think.hidden = data[0].reasoning !== true;
+          byId("model").textContent = model;
+          byId("greeting").textContent = `${model} is running on this computer.`;
+          setStatus("Ready", "ready");
+        } catch (problem) {
+          model = "";
+          byId("model").textContent = "No model";
+          setStatus("Unavailable", "error");
+          showError(`${problem.message} Check the server, then reconnect from Settings.`);
+        } finally {
+          connecting = false;
+          controls();
+        }
+      }
+
+      /* Messages */
+      function addUser(text) {
+        empty.hidden = true;
+        const article = el("article", "user");
+        article.append(el("h3", "sr-only", "You"), text);
+        transcript.append(article);
+        return article;
+      }
+
+      function addAssistant() {
+        const article = el("article", "assistant");
+        const reasoning = el("details", "reasoning");
+        const summary = reasoning.appendChild(el("summary"));
+        const pending = el("p", "dots");
+        pending.append(el("i"), el("i"), el("i"));
+        const view = {
+          article, reasoning, summary, pending,
+          trace: reasoning.appendChild(el("div", "reasoning-text")),
+          answer: el("div", "md"),
+          meta: el("div", "meta"),
+          raw: { reasoning: "", content: "" },
+          text: "", live: true, frame: 0, started: 0, thought: 0,
+        };
+        reasoning.hidden = view.meta.hidden = true;
+        article.append(el("h3", "sr-only", "Assistant"), reasoning, pending, view.answer, view.meta);
+        article.view = view;
+        transcript.append(article);
+        return view;
+      }
+
+      function paint(view) {
+        const { reasoning, content } = view.raw;
+        if (reasoning && content && !view.thought) view.thought = performance.now() - view.started;
+        const thinking = view.live && !content;
+        view.text = content;
+        view.reasoning.hidden = !reasoning;
+        view.reasoning.classList.toggle("live", thinking);
+        view.summary.textContent = thinking ? "Thinking…"
+          : view.thought ? `Thought for ${Math.max(1, Math.round(view.thought / 1000))} s` : "Reasoning";
+        view.trace.textContent = reasoning;
+        view.pending.hidden = !view.live || Boolean(reasoning || content);
+        view.answer.replaceChildren();
+        blocks(content.split("\n"), view.answer);
+      }
+
+      function schedule(view) {
+        view.frame ||= requestAnimationFrame(() => {
+          view.frame = 0;
+          const follow = nearEnd();
+          paint(view);
+          if (follow) scrollToEnd();
+        });
+      }
+
+      function finish(view, note) {
+        const button = (label, act) => {
+          const node = el("button", "ghost", label);
+          node.type = "button";
+          node.dataset.act = act;
+          return node;
+        };
+        if (view.text) view.meta.append(button("Copy", "copy"));
+        view.meta.append(button("Regenerate", "retry"));
+        if (note) view.meta.append(el("span", "subtle", note));
+        view.meta.hidden = false;
+      }
+
+      async function readEvents(response, onFrame) {
+        if (!response.body) throw new Error("The browser could not read the response stream.");
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) throw new Error("The server closed the response before completion.");
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split(/\r?\n\r?\n/);
+            buffer = events.pop();
+            for (const event of events) {
+              const data = event.split(/\r?\n/)
+                .filter((line) => line.startsWith("data:"))
+                .map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+              if (!data) continue;
+              if (data === "[DONE]") return;
+              const frame = JSON.parse(data);
+              if (frame.error) throw new Error(frame.error.message || "Generation failed.");
+              onFrame(frame);
+            }
+          }
+        } finally {
+          await reader.cancel().catch(() => {});
+          reader.releaseLock();
+        }
+      }
+
+      async function generate(user, userArticle) {
+        showError();
+        const system = byId("system").value.trim();
+        const messages = byId("single").checked ? [user]
+          : [...(system ? [{ role: "system", content: system }] : []), ...history, user];
+        latest?.meta.querySelector('[data-act="retry"]')?.remove();
+        const view = latest = addAssistant();
+        view.user = user;
+        view.userArticle = userArticle;
+        const controller = active = new AbortController();
+        controls();
+        scrollToEnd();
+        setStatus("Generating…", "busy");
+        let usage = null;
+        let note = "";
+        try {
+          const response = await fetch("/v1/chat/completions", {
+            method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+            body: JSON.stringify({
+              model, messages, stream: true, stream_options: { include_usage: true },
+              temperature: byId("temperature").valueAsNumber,
+              top_p: byId("top-p").valueAsNumber,
+              max_tokens: byId("limit").valueAsNumber,
+              ...(think.hidden ? {} : { chat_template_kwargs: { enable_thinking: thinking() } }),
+            }),
+          });
+          if (!response.ok) throw new Error(await responseError(response));
+          await readEvents(response, (frame) => {
+            usage = frame.usage ?? usage;
+            const delta = frame.choices?.[0]?.delta ?? {};
+            for (const [field, key] of [["reasoning", "reasoning_content"], ["content", "content"]]) {
+              if (typeof delta[key] !== "string" || !delta[key]) continue;
+              view.raw[field] += delta[key];
+              view.started ||= performance.now();
+              schedule(view);
+            }
+          });
+          const seconds = (performance.now() - view.started) / 1000;
+          const tokens = usage?.completion_tokens;
+          if (tokens > 1 && seconds > 0) note = `${tokens} tokens · ${((tokens - 1) / seconds).toFixed(1)} tokens/s`;
+          setStatus("Ready", "ready");
+        } catch (problem) {
+          if (controller.signal.aborted) {
+            note = "Stopped";
+            setStatus("Ready", "ready");
+          } else {
+            note = "Interrupted";
+            showError(problem.message || "Generation failed.");
+            setStatus("Generation interrupted", "error");
+          }
+        } finally {
+          cancelAnimationFrame(view.frame);
+          view.live = false;
+          const follow = nearEnd();
+          paint(view);
+          if (view.text) {
+            history.push(user, { role: "assistant", content: view.text });
+            view.saved = true;
+            finish(view, note);
+          } else if (view.raw.reasoning || view.raw.content) {
+            finish(view, note === "Stopped" || note === "Interrupted" ? note
+              : "The reply ended before an answer. Raise Max tokens in Settings.");
+          } else {
+            view.article.remove();
+            userArticle.remove();
+            latest = null;
+            if (!prompt.value) prompt.value = user.content;
+            empty.hidden = Boolean(transcript.querySelector("article"));
+          }
+          if (follow) scrollToEnd();
+          active = null;
+          fitPrompt();
+          controls();
+          if ([cancel, document.body].includes(document.activeElement)) prompt.focus();
+        }
+      }
+
+      async function copy(text, button) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const area = document.body.appendChild(el("textarea", "sr-only"));
+          area.value = text;
+          area.select();
+          document.execCommand("copy");
+          area.remove();
+        }
+        button.textContent = "Copied";
+        setTimeout(() => { button.textContent = "Copy"; }, 1500);
+      }
+
+      function saveSettings() {
+        const values = SAVED.map((id) => [id, byId(id).type === "checkbox" ? byId(id).checked : byId(id).value]);
+        values.push(["think", thinking()]);
+        try { localStorage.setItem("oryndral.settings", JSON.stringify(Object.fromEntries(values))); } catch {}
+      }
+
+      function loadSettings() {
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem("oryndral.settings")) || {}; } catch {}
+        for (const id of SAVED) {
+          if (typeof saved[id] === "boolean") byId(id).checked = saved[id];
+          else if (typeof saved[id] === "string") byId(id).value = saved[id];
+        }
+        if (typeof saved.think === "boolean") setThinking(saved.think);
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        if (send.disabled || active) return;
+        const user = { role: "user", content: prompt.value };
+        prompt.value = "";
+        fitPrompt();
+        generate(user, addUser(user.content));
+      });
+
+      transcript.addEventListener("click", (event) => {
+        const button = event.target.closest("button[data-act]");
+        if (!button) return;
+        const view = button.closest("article").view;
+        if (button.dataset.act === "copy") {
+          copy(button.closest(".code")?.querySelector("pre").textContent ?? view.text, button);
+        } else if (!active && view === latest) {
+          if (view.saved) history.length -= 2;
+          view.article.remove();
+          generate(view.user, view.userArticle);
+        }
+      });
+
+      prompt.addEventListener("input", () => { fitPrompt(); controls(); });
+      prompt.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+        event.preventDefault();
+        if (!send.disabled && !active) form.requestSubmit();
+      });
+      cancel.addEventListener("click", () => active?.abort());
+      think.addEventListener("click", () => { setThinking(!thinking()); saveSettings(); });
+      clear.addEventListener("click", () => {
+        history.length = 0;
+        latest = null;
+        transcript.replaceChildren(empty);
+        empty.hidden = false;
+        showError();
+        controls();
+        prompt.focus();
+      });
+      connect.addEventListener("click", discover);
+      settings.addEventListener("change", saveSettings);
+      settings.addEventListener("invalid", () => { settings.open = true; }, true);
+      document.addEventListener("pointerdown", (event) => {
+        if (!settings.contains(event.target)) settings.open = false;
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") settings.open = false;
+      });
+
+      loadSettings();
+      discover();
+      prompt.focus();
+    }
   </script>
 </body>
 </html>

@@ -230,15 +230,10 @@ impl ModelFile {
                 "{name}: unsupported {} tensor",
                 c.architecture.prefix()
             );
-            if bias_supported {
-                ensure!(
-                    matches!(
-                        t.ggml_dtype,
-                        GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16
-                    ),
-                    "{name}: expected an unquantized bias"
-                );
-            }
+            ensure!(
+                !bias_supported || is_float(t.ggml_dtype),
+                "{name}: expected an unquantized bias"
+            );
         }
         expect("token_embd.weight", &[c.vocab, c.width])?;
         expect(self.output_name(), &[c.vocab, c.width])?;
@@ -379,11 +374,15 @@ impl ModelFile {
         as_matrix(self.quant(name, device)?)
     }
 
+    fn vector(&mut self, name: &str, device: &Device) -> Result<Tensor> {
+        Ok(self.quant(name, device)?.dequantize(device)?)
+    }
+
     fn bias(&mut self, name: &str, device: &Device) -> Result<Option<Tensor>> {
         self.gguf
             .tensor_infos
             .contains_key(name)
-            .then(|| Ok(self.quant(name, device)?.dequantize(device)?))
+            .then(|| self.vector(name, device))
             .transpose()
     }
 
@@ -446,26 +445,27 @@ fn tensor_bytes(t: &TensorInfo) -> Result<u64> {
         .context("GGUF byte size overflow")
 }
 
-fn f32_bytes(t: &TensorInfo) -> Result<u64> {
-    elements(t)?
-        .checked_mul(4)
-        .context("tensor byte size overflow")
+/// Float tensors are held as f32 at run time. Quantized tensors keep their GGUF encoding.
+fn is_float(dtype: GgmlDType) -> bool {
+    matches!(dtype, GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16)
 }
 
 fn runtime_bytes(t: &TensorInfo) -> Result<u64> {
-    match t.ggml_dtype {
-        GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => f32_bytes(t),
-        _ => tensor_bytes(t),
+    if is_float(t.ggml_dtype) {
+        elements(t)?
+            .checked_mul(4)
+            .context("tensor byte size overflow")
+    } else {
+        tensor_bytes(t)
     }
 }
 
 fn as_matrix(t: candle::quantized::QTensor) -> Result<QMatMul> {
-    match t.dtype() {
-        GgmlDType::F32 | GgmlDType::F16 | GgmlDType::BF16 => {
-            Ok(QMatMul::Tensor(t.dequantize(&t.device())?))
-        }
-        _ => Ok(QMatMul::QTensor(Arc::new(t))),
-    }
+    Ok(if is_float(t.dtype()) {
+        QMatMul::Tensor(t.dequantize(&t.device())?)
+    } else {
+        QMatMul::QTensor(Arc::new(t))
+    })
 }
 
 #[derive(Default)]
@@ -569,12 +569,8 @@ impl Layer {
             k: Projection::load(src, &name("attn_k"), device)?,
             v: Projection::load(src, &name("attn_v"), device)?,
             output: src.matrix(&name("attn_output.weight"), device)?,
-            attn_norm: src
-                .quant(&name("attn_norm.weight"), device)?
-                .dequantize(device)?,
-            ffn_norm: src
-                .quant(&name("ffn_norm.weight"), device)?
-                .dequantize(device)?,
+            attn_norm: src.vector(&name("attn_norm.weight"), device)?,
+            ffn_norm: src.vector(&name("ffn_norm.weight"), device)?,
             ff,
         })
     }
@@ -643,6 +639,7 @@ pub struct IoStats {
     pub expert_misses: u64,
 }
 
+#[derive(Default)]
 struct ExpertCache {
     entries: HashMap<(usize, usize), CachedExpert>,
     used: u64,
@@ -762,6 +759,30 @@ pub struct Session {
     pos: usize,
 }
 
+impl Session {
+    /// The number of tokens whose attention state the session holds.
+    pub fn tokens(&self) -> usize {
+        self.pos
+    }
+
+    /// Forget everything after the first `len` tokens.
+    pub fn truncate(&mut self, len: usize) -> Result<()> {
+        if len >= self.pos {
+            return Ok(());
+        }
+        for kv in &mut self.kv {
+            for cached in [&mut kv.keys, &mut kv.values] {
+                *cached = match cached.take() {
+                    Some(tensor) if len > 0 => Some(tensor.narrow(2, 0, len)?),
+                    _ => None,
+                };
+            }
+        }
+        self.pos = len;
+        Ok(())
+    }
+}
+
 impl Model {
     pub fn load(
         mut src: ModelFile,
@@ -787,7 +808,7 @@ impl Model {
             None
         };
         let embedding = src.matrix("token_embd.weight", cpu)?;
-        let norm = src.quant("output_norm.weight", cpu)?.dequantize(cpu)?;
+        let norm = src.vector("output_norm.weight", cpu)?;
         let output = if src.output_name() == "token_embd.weight" {
             embedding.clone()
         } else {
@@ -816,12 +837,8 @@ impl Model {
             gpu,
             plan,
             cache: ExpertCache {
-                entries: HashMap::new(),
-                used: 0,
                 options: experts,
-                tick: 0,
-                hits: 0,
-                misses: 0,
+                ..Default::default()
             },
         })
     }
@@ -946,16 +963,11 @@ mod tests {
         let load = |mode| {
             let file = ModelFile::open(Path::new(&path)).unwrap();
             let memory = file.memory(128, 0).unwrap();
-            let plan = crate::planner::plan(
-                &memory,
-                crate::planner::PlanOptions {
-                    mode,
-                    gpu_layers: Some(0),
-                    ram_budget: None,
-                    vram_budget: None,
-                },
-            )
-            .unwrap();
+            let options = crate::planner::PlanOptions {
+                mode,
+                ..Default::default()
+            };
+            let plan = crate::planner::plan(&memory, options).unwrap();
             Model::load(file, plan, 128, 0, ExpertOptions::default()).unwrap()
         };
         let (mut resident, mut streamed) = (load(Mode::Resident), load(Mode::DenseStream));

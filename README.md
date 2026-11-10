@@ -29,7 +29,7 @@ Open [Oryndral chat](http://127.0.0.1:8080/) or point an OpenAI-compatible clien
 
 - Single-file GGUF inference for supported Llama and dense Qwen2 layouts, including Mythos-nano.
 - CPU inference, dense layer streaming, and expert streaming for supported Llama MoE models. NVIDIA layer offload is available with a CUDA build. [Architecture](docs/architecture.md) · [Verified models and benchmarks](docs/benchmark.md)
-- Local browser chat, an OpenAI-compatible text and chat API, and Hugging Face downloads via `serve --hf`. The chat keeps recognized reasoning blocks separate from the answer.
+- Local browser chat, an OpenAI-compatible text and chat API, and Hugging Face downloads via `serve --hf`. The chat keeps recognized reasoning blocks separate from the answer, and reasoning can be switched off per request.
 - A [Windows desktop app](desktop/README.md) that starts the engine and opens the chat.
 
 ## License
